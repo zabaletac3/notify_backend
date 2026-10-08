@@ -102,3 +102,33 @@ func TestUnknownRoute(t *testing.T) {
 		t.Fatalf("404 esperado, fue %d", got)
 	}
 }
+
+func TestClientIP(t *testing.T) {
+	mk := func(remote, xff string) *http.Request {
+		r := httptest.NewRequestWithContext(context.Background(), "GET", "/", nil)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	cases := []struct {
+		name  string
+		r     *http.Request
+		trust bool
+		want  string
+	}{
+		{"sin proxy ignora la cabecera", mk("203.0.113.5:4000", "6.6.6.6"), false, "203.0.113.5"},
+		{"con proxy usa la última entrada", mk("10.0.0.2:4000", "6.6.6.6, 198.51.100.7"), true, "198.51.100.7"},
+		{"con proxy y una sola entrada", mk("10.0.0.2:4000", "198.51.100.7"), true, "198.51.100.7"},
+		{"con proxy y entrada inválida cae a la conexión", mk("10.0.0.2:4000", "no-es-ip"), true, "10.0.0.2"},
+		{"con proxy sin cabecera", mk("10.0.0.2:4000", ""), true, "10.0.0.2"},
+		{"IPv6", mk("[2001:db8::1]:4000", ""), false, "2001:db8::1"},
+		{"remoto ilegible", mk("???", ""), false, "unknown"},
+	}
+	for _, c := range cases {
+		if got := ClientIP(c.r, c.trust); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
