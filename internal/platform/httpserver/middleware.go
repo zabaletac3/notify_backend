@@ -92,15 +92,20 @@ func SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// MaxBody limita el tamaño del cuerpo y rechaza cuerpos declarados demasiado grandes.
-func MaxBody(limit int64) func(http.Handler) http.Handler {
+// MaxBody limita el tamaño del cuerpo y rechaza cuerpos declarados demasiado grandes. `overrides`
+// fija otro límite para rutas concretas (p. ej. /v1/sync, que lleva notas cifradas).
+func MaxBody(limit int64, overrides map[string]int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.ContentLength > limit {
+			l := limit
+			if o, ok := overrides[r.URL.Path]; ok {
+				l = o
+			}
+			if r.ContentLength > l {
 				response.Error(w, r, nil, apperrors.PayloadTooLarge())
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
+			r.Body = http.MaxBytesReader(w, r.Body, l)
 			next.ServeHTTP(w, r)
 		})
 	}

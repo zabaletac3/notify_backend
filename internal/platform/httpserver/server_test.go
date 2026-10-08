@@ -20,7 +20,7 @@ func (f fakeDB) Ping(context.Context) error { return f.err }
 
 func newTestRouter(db Pinger) (http.Handler, *bytes.Buffer) {
 	var buf bytes.Buffer
-	cfg := &config.Config{MaxBodyBytes: 16, AllowedOrigins: []string{"https://app.example.com"}}
+	cfg := &config.Config{MaxBodyBytes: 16, MaxSyncBodyBytes: 64, AllowedOrigins: []string{"https://app.example.com"}}
 	return NewRouter(cfg, slog.New(slog.NewJSONHandler(&buf, nil)), db), &buf
 }
 

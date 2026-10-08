@@ -38,3 +38,10 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Restablecer: `forgot` (token de 256 bits, hash SHA-256, 1 h, un solo uso) → `reset/bundle` → `reset` con `keep` (exige `recoveryAuth` vigente; 5 intentos/h por cuenta) o `wipe` (borra notas, carpetas, enlaces y lápidas **de esa cuenta** con RLS). Ambos cierran todas las sesiones y recuperan una cuenta en periodo de gracia.
 - Cada cambio de credenciales deja un evento en `audit_log` y avisa por correo al dueño.
 - `DELETE /me` solo marca `deleted_at` y cierra sesiones; la purga definitiva (30 días) llega en la fase 8.
+
+## Sincronización (`internal/modules/notesync`)
+- `POST /sync` replica `MockSyncServer` de la web: todo se valida antes de aplicar nada (una petición inválida no deja cambios a medias), una sola transacción, `baseRevision` solo en notas (conflicto = se devuelve la versión del servidor, sin pisar), carpetas «gana el último», lápidas para borrados definitivos, carpetas antes que notas en `remoteChanges`.
+- `seq` por cuenta con `next_seq()`; las escrituras de una cuenta se serializan (`SELECT … FOR UPDATE` sobre `users`) y el cursor es `account_seq` leído tras escribir, así que nunca salta un cambio (test de concurrencia).
+- El dispositivo es el del token (`did`); `deviceId`/`deviceName` del cuerpo se ignoran. Un id que pertenece a otra cuenta da 422 sin detalles (RLS + PK global).
+- Límites por configuración: `MAX_SYNC_BODY_BYTES` (8 MiB, solo `/v1/sync`), `MAX_SYNC_CHANGES`, `MAX_NOTES_PER_ACCOUNT`, `MAX_FOLDERS_PER_ACCOUNT` (`forbidden/limit-reached`).
+- Los módulos no se importan entre sí: `notesync` recibe una `PrincipalFunc` y el middleware de auth se aplica en `main`.

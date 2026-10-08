@@ -2,11 +2,7 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"log/slog"
-	"mime"
 	"net/http"
 	"strings"
 
@@ -81,25 +77,8 @@ func (h *Handler) Routes(r chi.Router) {
 
 func (h *Handler) ip(r *http.Request) string { return httpserver.ClientIP(r, h.trustProxy) }
 
-// decode lee un cuerpo JSON estricto: tipo correcto, sin campos desconocidos ni datos de más.
-func decode(w http.ResponseWriter, r *http.Request, v any) error {
-	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
-		return apperrors.Validation(map[string]string{"body": "invalid-payload"})
-	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			return apperrors.PayloadTooLarge()
-		}
-		return apperrors.Validation(map[string]string{"body": "invalid-payload"})
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return apperrors.Validation(map[string]string{"body": "invalid-payload"})
-	}
-	return nil
-}
+// decode lee un cuerpo JSON estricto (ver httpserver.DecodeJSON).
+func decode(_ http.ResponseWriter, r *http.Request, v any) error { return httpserver.DecodeJSON(r, v) }
 
 func (h *Handler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	response.Error(w, r, h.log, err)

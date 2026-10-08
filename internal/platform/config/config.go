@@ -41,7 +41,13 @@ type Config struct {
 	// Con false (dev) se usa la dirección de la conexión y se ignora la cabecera.
 	TrustProxy bool `env:"TRUST_PROXY" envDefault:"false"`
 
-	MaxBodyBytes    int64         `env:"MAX_BODY_BYTES" envDefault:"1048576"`
+	MaxBodyBytes int64 `env:"MAX_BODY_BYTES" envDefault:"1048576"`
+	// Límites de /sync: tamaño del cuerpo y cantidad de elementos por cuenta.
+	MaxSyncBodyBytes int64 `env:"MAX_SYNC_BODY_BYTES" envDefault:"8388608"`
+	MaxSyncChanges   int   `env:"MAX_SYNC_CHANGES" envDefault:"500"`
+	MaxNotes         int   `env:"MAX_NOTES_PER_ACCOUNT" envDefault:"10000"`
+	MaxFolders       int   `env:"MAX_FOLDERS_PER_ACCOUNT" envDefault:"500"`
+
 	ReadTimeout     time.Duration `env:"READ_TIMEOUT" envDefault:"15s"`
 	WriteTimeout    time.Duration `env:"WRITE_TIMEOUT" envDefault:"30s"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"15s"`
@@ -107,6 +113,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		add("PORT fuera de rango")
+	}
+	if c.MaxSyncBodyBytes < c.MaxBodyBytes || c.MaxSyncChanges < 1 || c.MaxNotes < 1 || c.MaxFolders < 1 {
+		add("los límites de sincronización no son válidos")
 	}
 	if c.MaxBodyBytes < 1 {
 		add("MAX_BODY_BYTES debe ser positivo")
