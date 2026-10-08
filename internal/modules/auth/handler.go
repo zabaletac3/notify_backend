@@ -71,6 +71,7 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Get("/keys", h.keys)
 		r.Put("/keys/recovery", h.rotateRecovery)
 		r.Post("/me/password", h.changePassword)
+		r.Post("/me/delete", h.deleteMeConfirmed)
 		r.Delete("/me", h.deleteMe)
 		r.Get("/me", h.me)
 		r.Patch("/me", h.updateMe)
@@ -297,12 +298,33 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	response.NoContent(w)
 }
 
-func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
+// legacyDeleteSunset es la fecha de retirada de DELETE /me: ajustar a despliegue + 14 días antes del
+// primer despliegue.
+const legacyDeleteSunset = "Mon, 30 Nov 2026 00:00:00 GMT"
+
+func (h *Handler) deleteMeConfirmed(w http.ResponseWriter, r *http.Request) {
 	p, _ := PrincipalFrom(r.Context())
-	if err := h.svc.DeleteAccount(r.Context(), p); err != nil {
+	var b DeleteAccountRequest
+	if err := decode(w, r, &b); err != nil {
 		h.fail(w, r, err)
 		return
 	}
+	if err := h.svc.DeleteAccount(r.Context(), p, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	if err := h.svc.DeleteAccountLegacy(r.Context(), p); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", legacyDeleteSunset)
+	w.Header().Set("Link", `</v1/me/delete>; rel="successor-version"`)
 	w.WriteHeader(http.StatusAccepted)
 }
 
