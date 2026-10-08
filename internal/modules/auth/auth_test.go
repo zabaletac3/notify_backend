@@ -61,7 +61,7 @@ func newEnv(t *testing.T) *env {
 		Now:    func() time.Time { return e.now }})
 	t.Cleanup(e.svc.Close)
 	h := auth.NewHandler(e.svc, log, true)
-	e.h = httpserver.NewRouter(&config.Config{MaxBodyBytes: 1 << 20}, log, pinger{}, h.Routes)
+	e.h = httpserver.NewRouter(&config.Config{MaxBodyBytes: 1 << 20, MaxSyncBodyBytes: 8 << 20}, log, pinger{}, h.Routes)
 	return e
 }
 

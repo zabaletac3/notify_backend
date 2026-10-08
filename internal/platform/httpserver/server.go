@@ -25,7 +25,7 @@ type Pinger interface {
 // NewRouter arma el router base. Los módulos montan sus rutas sobre él (fases siguientes).
 func NewRouter(cfg *config.Config, log *slog.Logger, db Pinger, modules ...func(chi.Router)) *chi.Mux {
 	r := chi.NewRouter()
-	r.Use(TraceID, Recover(log), Logging(log), SecurityHeaders, MaxBody(cfg.MaxBodyBytes))
+	r.Use(TraceID, Recover(log), Logging(log), SecurityHeaders, MaxBody(cfg.MaxBodyBytes, map[string]int64{"/v1/sync": cfg.MaxSyncBodyBytes}))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},

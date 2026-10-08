@@ -8,7 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/zabaletac3/notify_backend/internal/modules/auth"
+	"github.com/zabaletac3/notify_backend/internal/modules/notesync"
 	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"github.com/zabaletac3/notify_backend/internal/platform/database"
 	"github.com/zabaletac3/notify_backend/internal/platform/httpserver"
@@ -70,7 +73,19 @@ func run() error {
 	defer authSvc.Close() // espera a los correos en vuelo
 	authHandler := auth.NewHandler(authSvc, log, cfg.TrustProxy)
 
-	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool, authHandler.Routes))
+	syncSvc := notesync.NewService(pool, notesync.Limits{MaxChanges: cfg.MaxSyncChanges, MaxNotes: cfg.MaxNotes, MaxFolders: cfg.MaxFolders})
+	syncHandler := notesync.NewHandler(syncSvc, log, func(ctx context.Context) (string, string, bool) {
+		p, ok := auth.PrincipalFrom(ctx)
+		return p.UserID, p.DeviceID, ok
+	})
+	protected := func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(authHandler.Require)
+			syncHandler.Routes(r)
+		})
+	}
+
+	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool, authHandler.Routes, protected))
 	log.Info("api escuchando", "port", cfg.Port, "mail", cfg.Mail.Provider)
 	return httpserver.Serve(ctx, srv, cfg.ShutdownTimeout)
 }
