@@ -64,7 +64,7 @@ func newEnv(t *testing.T, lim notesync.Limits) *env {
 	e.auth = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: ratelimit.New(db.App, pepper), Mailer: e.mail, Log: log,
 		Config: auth.Config{Pepper: pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 24 * time.Hour, WebBaseURL: "http://web.test"}})
 	t.Cleanup(e.auth.Close)
-	ah := auth.NewHandler(e.auth, log, true)
+	ah := auth.NewHandler(e.auth, log, true, auth.CookieOptions{})
 	if lim.MaxChanges == 0 {
 		lim = notesync.Limits{MaxChanges: 500, MaxNotes: 10000, MaxFolders: 500}
 	}
