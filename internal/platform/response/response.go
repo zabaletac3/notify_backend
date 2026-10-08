@@ -15,9 +15,7 @@ import (
 func write(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	if body != nil {
-		_ = json.NewEncoder(w).Encode(body)
-	}
+	_ = json.NewEncoder(w).Encode(body) // un cuerpo nil se envía como `null` (p. ej. «sin enlace»)
 }
 
 // JSON responde con el cuerpo tal cual.

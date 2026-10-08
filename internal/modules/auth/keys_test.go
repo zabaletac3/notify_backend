@@ -63,7 +63,7 @@ func (e *env) addNote(userEmail string) {
 		`INSERT INTO notes (id, user_id, revision, seq, created_at, updated_at, wrapped_key, payload) VALUES ('` + nid + `', '` + uid + `', 1, 1, now(), now(), '` + sealedA + `', '` + sealedA + `')`,
 		`INSERT INTO folders (id, user_id, revision, seq, created_at, updated_at, wrapped_key, payload) VALUES (gen_random_uuid(), '` + uid + `', 1, 2, now(), now(), '` + sealedA + `', '` + sealedA + `')`,
 		`INSERT INTO tombstones (user_id, entity, id, revision, seq) VALUES ('` + uid + `', 'note', gen_random_uuid(), 1, 3)`,
-		`INSERT INTO share_links (slug, note_id, user_id, payload) VALUES (substr(replace('` + uid + `', '-', ''), 1, 22), '` + nid + `', '` + uid + `', '` + sealedA + `')`,
+		`INSERT INTO share_links (slug, note_id, user_id, wrapped_key, payload) VALUES (substr(replace('` + uid + `', '-', ''), 1, 22), '` + nid + `', '` + uid + `', '` + sealedA + `', '` + sealedA + `')`,
 	} {
 		if _, err := e.db.Admin.Exec(ctx, q); err != nil {
 			e.t.Fatal(err)
