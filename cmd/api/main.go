@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/zabaletac3/notify_backend/internal/modules/auth"
 	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"github.com/zabaletac3/notify_backend/internal/platform/database"
 	"github.com/zabaletac3/notify_backend/internal/platform/httpserver"
@@ -61,10 +62,15 @@ func run() error {
 		return err
 	}
 	limiter := ratelimit.New(pool, []byte(cfg.Pepper))
-	// Se conectan a los módulos de auth/cuenta en las fases siguientes.
-	_, _, _, _ = mail, hasher, signer, limiter
 
-	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool))
+	authSvc := auth.NewService(auth.Deps{
+		Pool: pool, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: mail, Log: log,
+		Config: auth.Config{Pepper: []byte(cfg.Pepper), AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL},
+	})
+	defer authSvc.Close() // espera a los correos en vuelo
+	authHandler := auth.NewHandler(authSvc, log, cfg.TrustProxy)
+
+	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool, authHandler.Routes))
 	log.Info("api escuchando", "port", cfg.Port, "mail", cfg.Mail.Provider)
 	return httpserver.Serve(ctx, srv, cfg.ShutdownTimeout)
 }

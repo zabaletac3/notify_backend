@@ -45,7 +45,7 @@ func New(t *testing.T) *DB {
 	must(t, err)
 
 	dbURL := withDB(t, adminURL, dbName, "", "")
-	must(t, database.Migrate(ctx, dbURL, "up"))
+	migrateSerialized(t, root, dbURL)
 
 	// Rol de login de la API: miembro de apunte_app (creado por la migración).
 	_, err = root.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s' IN ROLE apunte_app`, role, pass))
@@ -87,4 +87,19 @@ func must(t *testing.T, err error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// migrateSerialized aplica las migraciones bajo un bloqueo del servidor: los paquetes de prueba corren
+// en paralelo (procesos distintos) y la primera migración crea un rol global, lo que no admite carreras.
+func migrateSerialized(t *testing.T, root *pgxpool.Pool, dbURL string) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := root.Acquire(ctx)
+	must(t, err)
+	defer conn.Release()
+	const lockID = 7_265_001
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockID)
+	must(t, err)
+	defer func() { _, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockID) }()
+	must(t, database.Migrate(ctx, dbURL, "up"))
 }

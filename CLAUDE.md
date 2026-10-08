@@ -24,3 +24,11 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Tokens de renovación y códigos: solo se guarda su hash (`HashToken`, `HashCode` ligado a finalidad y cuenta). Los tokens de acceso son JWT HS256 (`Signer`), con rotación de secreto (`JWT_SECRET_PREVIOUS`).
 - Límites: `ratelimit.Limiter` (`Fail` para login, `Take` para el resto, `Reset` tras éxito). Las claves son HMAC de correo/IP. Si devuelve error, **denegar** (fallar cerrado).
 - IP del cliente: `httpserver.ClientIP(r, cfg.TrustProxy)`; nunca leer `X-Forwarded-For` a mano.
+
+## Contrato HTTP
+- Las respuestas llevan el cuerpo del contrato **sin envoltorio**; los errores tienen la forma `AppError` (`{kind, code?, fields?, retryAfterSec?}`): crear siempre con `apperrors.*` y responder con `response.Error(w, r, log, err)`. Un error desconocido sale como `{kind:"server"}`.
+- Rutas bajo `/v1`; cada módulo expone `Routes(chi.Router)` y se monta en `httpserver.NewRouter`.
+- Cuerpos JSON estrictos (`decode`: tipo, sin campos desconocidos, sin datos de más).
+- Anti-enumeración: `register`, `resend-code`, `forgot` y `prelogin` responden igual exista o no la cuenta; el correo se envía en segundo plano (`Service.send`) para no filtrar por tiempo.
+- Sesión: acceso JWT corto + renovación opaca con rotación; reusar un token gastado revoca la familia y el dispositivo. El dispositivo del token (`did`) se comprueba en cada petición (`device-revoked`).
+- La API no puede borrar usuarios; solo `discard_unverified_user()` (migración 00004) elimina registros sin verificar.

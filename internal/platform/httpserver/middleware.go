@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"runtime/debug"
 	"time"
 
+	"github.com/zabaletac3/notify_backend/internal/platform/apperrors"
 	"github.com/zabaletac3/notify_backend/internal/platform/response"
 )
 
@@ -45,7 +47,7 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 				if rec := recover(); rec != nil {
 					log.Error("panic recovered", "panic", rec, "stack", string(debug.Stack()),
 						"traceId", TraceIDFrom(r.Context()))
-					response.Error(w, r, http.StatusInternalServerError, "internal server error")
+					response.Error(w, r, log, apperrors.Internal(fmt.Errorf("panic: %v", rec)))
 				}
 			}()
 			next.ServeHTTP(w, r)
@@ -95,7 +97,7 @@ func MaxBody(limit int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength > limit {
-				response.Error(w, r, http.StatusRequestEntityTooLarge, "payload too large")
+				response.Error(w, r, nil, apperrors.PayloadTooLarge())
 				return
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
