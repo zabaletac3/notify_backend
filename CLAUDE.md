@@ -11,7 +11,7 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Cada fase termina con `make test`, `make lint`, `go vet ./...` y `make vuln` en verde.
 
 ## Comandos
-`make up` (Postgres) · `make run` · `make test` · `make lint` · `make vuln`
+`make up` (Postgres) · `make run` (carga `.env` si existe; el entorno del proceso manda) · `make test` · `make lint` · `make vuln`
 
 ## Base de datos
 - Migraciones en `migrations/` (goose, embebidas; `make migrate`). Solo hacia adelante y compatibles hacia atrás.

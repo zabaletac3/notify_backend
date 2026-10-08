@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"os"
 	"os/signal"
 
@@ -21,6 +22,9 @@ func main() {
 }
 
 func run() error {
+	if err := config.LoadDotEnv(".env"); err != nil { // solo desarrollo: el entorno del proceso manda
+		return err
+	}
 	url := os.Getenv("MIGRATE_DATABASE_URL")
 	if url == "" {
 		return fmt.Errorf("falta MIGRATE_DATABASE_URL")

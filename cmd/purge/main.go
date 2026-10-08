@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,6 +38,9 @@ func envDays(name string, def time.Duration) (time.Duration, error) {
 }
 
 func run() error {
+	if err := config.LoadDotEnv(".env"); err != nil { // solo desarrollo: el entorno del proceso manda
+		return err
+	}
 	url := os.Getenv("PURGE_DATABASE_URL")
 	if url == "" {
 		return fmt.Errorf("falta PURGE_DATABASE_URL")
