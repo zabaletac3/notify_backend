@@ -54,7 +54,8 @@ Revisa que: `/v1/*` sin sesión responda 401; no haya `Server`/`X-Powered-By`; H
 - [ ] `docs/deploy.md` completo; `production` con aprobación manual; ramas `main` y `develop` protegidas.
 - [ ] `restore-test.sh` ejecutado con una copia real y recuentos coherentes.
 - [ ] Latidos de copia y purga recibiendo avisos; UptimeRobot en `/ready`.
-- [ ] `caddy validate --config deploy/caddy/Caddyfile` correcto en el servidor (no se pudo validar en el entorno de desarrollo).
+- [x] `caddy validate` del `Caddyfile` (Caddy 2.10, con los filtros de logs) y `docker compose config` de qa y prod: correctos (verificados en el entorno de desarrollo). Repetir `caddy validate` en el servidor con las variables reales.
+- [x] Ciclo de copia con restic (volcado con `apunte_backup` → restic → `restic check` → restauración): las filas protegidas por RLS se vuelcan y los recuentos coinciden (probado con un repositorio local). Falta repetirlo contra el bucket real (`restore-test.sh`).
 - [ ] ZAP y nuclei contra QA sin hallazgos medios o altos.
 - [ ] Política de privacidad: correo y metadatos son datos personales (Ley 1581); contenido de notas cifrado de extremo a extremo; sin recuperación si se pierden contraseña **y** clave de recuperación.
 
