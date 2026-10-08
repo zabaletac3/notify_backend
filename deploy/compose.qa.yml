@@ -1,0 +1,7 @@
+# Ajustes de QA: registros detallados, correo en el log y menos recursos.
+name: apunte-qa
+services:
+  api:
+    mem_limit: 384m
+  postgres:
+    mem_limit: 384m

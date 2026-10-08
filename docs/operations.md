@@ -28,20 +28,20 @@ Idempotente; borra, por lotes:
 | Contadores de límites sin actividad ni bloqueo | > 2 días | — |
 | Auditoría | > 365 días | `AUDIT_RETENTION_DAYS` |
 
-Instalación: copia `deploy/apunte-purge.{service,timer}` a `/etc/systemd/system/`, crea `/etc/apunte/purge.env` con `PURGE_DATABASE_URL` (rol `apunte_purge`) y, si quieres alertas, `PURGE_PING_URL`; después `systemctl enable --now apunte-purge.timer`. Ver los resultados: `journalctl -u apunte-purge`.
+Instalación (solo en prod): copia `deploy/apunte-purge.{service,timer}` a `/etc/systemd/system/`, crea `/etc/apunte/prod.purge.env` (`chmod 600`) con `PURGE_DATABASE_URL=postgres://apunte_purge:…@postgres:5432/apunte?sslmode=disable` y, si quieres alertas, `PURGE_PING_URL`; después `systemctl enable --now apunte-purge.timer`. Corre dentro de la red interna de la pila, con la misma imagen de la API. Ver los resultados: `journalctl -u apunte-purge`.
 
 ## Copias de seguridad (`deploy/backup.sh`)
 
 `pg_dump` → `restic` (cifrado con una contraseña que no sale del servidor salvo en tu gestor de contraseñas) → bucket de R2/B2 **solo de prod**, con credenciales que QA no conoce. Retención: 7 diarias, 4 semanales, 6 mensuales. Tras cada copia se comprueba el 5 % de los datos del repositorio.
 
-Instalación: `/etc/apunte/backup.env` (ver cabecera del script), copiar `deploy/apunte-backup.{service,timer}` y `systemctl enable --now apunte-backup.timer`.
+Instalación: `/etc/apunte/backup.env` (`BACKUP_PASSWORD`, variables de restic y `BACKUP_PING_URL`; ver la cabecera del script), copiar `deploy/apunte-backup.{service,timer}` a `/etc/systemd/system/` y `systemctl enable --now apunte-backup.timer`. El volcado se hace dentro del contenedor de PostgreSQL (la base no publica puertos).
 
 **Guarda la contraseña de restic fuera del servidor.** Sin ella, las copias no se pueden abrir (a propósito).
 
 ### Restaurar (prueba mensual y desastre)
 
-1. Prueba mensual, en QA: `RESTORE_ADMIN_URL=… deploy/restore-test.sh`. Restaura la última copia en una base temporal, muestra versión de migraciones y recuentos, y la borra.
-2. Desastre: servidor nuevo → `deploy/setup-server.sh` (fase 9) → `restic dump latest apunte.dump > apunte.dump` → crear la base y los roles (`deploy/db-roles.sql`) → `pg_restore --no-owner --dbname=… apunte.dump` → arrancar la API → cambiar la IP en Cloudflare.
+1. Prueba mensual, en QA (con las variables de restic cargadas): `deploy/restore-test.sh`. Restaura la última copia de prod en una base temporal del PostgreSQL de QA, muestra versión de migraciones y recuentos, y la borra.
+2. Desastre: servidor nuevo → `deploy/setup-server.sh` → `restic dump latest apunte.dump > apunte.dump` → crear la base y los roles (`deploy/db-roles.sql`) → `pg_restore --no-owner --dbname=… apunte.dump` → arrancar la API → cambiar la IP en Cloudflare.
 3. Lo cifrado extremo a extremo se restaura tal cual: el servidor nunca tuvo las claves, así que una copia robada tampoco las contiene.
 
 ## Alertas (gratis)

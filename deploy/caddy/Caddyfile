@@ -1,0 +1,56 @@
+# Lo ÚNICO expuesto a internet. Atiende los dos ambientes del servidor: cada dominio va a su API por la red `edge`.
+# Cloudflare va delante (modo SSL «Full (strict)»); aquí se confía en sus rangos para obtener la IP real.
+{
+	email {$ACME_EMAIL}
+	servers {
+		trusted_proxies static {$CLOUDFLARE_RANGES}
+		client_ip_headers CF-Connecting-IP
+		timeouts {
+			read_header 10s
+			read_body 30s
+			write 60s
+			idle 2m
+		}
+	}
+}
+
+(api) {
+	encode zstd gzip
+	request_body {
+		max_size 9MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	# La API recibe UNA sola IP en X-Forwarded-For (la real del cliente según Cloudflare), nunca la que mande el cliente.
+	reverse_proxy {args[0]}:8080 {
+		header_up X-Forwarded-For {client_ip}
+		header_up -X-Real-IP
+		header_up -CF-Connecting-IP
+		health_uri /health
+		health_interval 15s
+	}
+	log {
+		output stdout
+		format json
+		# No se registran cabeceras de autorización ni cookies.
+		format filter {
+			request delete headers
+		}
+	}
+}
+
+{$API_DOMAIN_PROD} {
+	import api api-prod
+}
+
+{$API_DOMAIN_QA} {
+	import api api-qa
+}
+
+# Cualquier otro nombre de host: sin respuesta.
+:80, :443 {
+	respond 421
+}

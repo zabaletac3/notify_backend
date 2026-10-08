@@ -4,9 +4,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -24,6 +26,10 @@ import (
 )
 
 func main() {
+	// `api -healthcheck`: para el HEALTHCHECK de Docker (la imagen no tiene shell ni curl).
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		os.Exit(healthcheck())
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -100,4 +106,28 @@ func run() error {
 	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool, authHandler.Routes, protected, shareHandler.PublicRoutes))
 	log.Info("api escuchando", "port", cfg.Port, "mail", cfg.Mail.Provider)
 	return httpserver.Serve(ctx, srv, cfg.ShutdownTimeout)
+}
+
+// healthcheck consulta /ready en el propio proceso; 0 = listo, 1 = no.
+func healthcheck() int {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	//nolint:gosec // siempre 127.0.0.1; PORT lo fija quien opera el servidor
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+"/ready", nil)
+	if err != nil {
+		return 1
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // idem
+	if err != nil {
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }
