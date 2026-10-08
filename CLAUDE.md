@@ -28,6 +28,7 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 ## Contrato HTTP
 - Las respuestas llevan el cuerpo del contrato **sin envoltorio**; los errores tienen la forma `AppError` (`{kind, code?, fields?, retryAfterSec?}`): crear siempre con `apperrors.*` y responder con `response.Error(w, r, log, err)`. Un error desconocido sale como `{kind:"server"}`.
 - Rutas bajo `/v1`; cada módulo expone `Routes(chi.Router)` y se monta en `httpserver.NewRouter`.
+- Si cambias una ruta, `make test` falla hasta que el contrato coincida: `internal/contract` compara el router con `../notify_web/docs/api/openapi.yaml` (necesita `TEST_DATABASE_URL`; en CI lo vigila el job `contract`). Orden: YAML → backend → web.
 - Cuerpos JSON estrictos (`decode`: tipo, sin campos desconocidos, sin datos de más).
 - Anti-enumeración: `register`, `resend-code`, `forgot` y `prelogin` responden igual exista o no la cuenta; el correo se envía en segundo plano (`Service.send`) para no filtrar por tiempo.
 - Sesión: acceso JWT corto + renovación opaca con rotación; reusar un token gastado revoca la familia y el dispositivo. El dispositivo del token (`did`) se comprueba en cada petición (`device-revoked`).
