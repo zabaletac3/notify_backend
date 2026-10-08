@@ -37,3 +37,29 @@ func accountDeletedMail(to string, days int) mailer.Message {
 			"Si no fuiste tú, usa «Olvidé mi contraseña» antes de ese plazo: al restablecer la contraseña la cuenta se recupera.", days),
 	}
 }
+
+func emailChangeCodeMail(to, code string, ttl time.Duration) mailer.Message {
+	return mailer.Message{
+		To:      to,
+		Subject: "Confirma tu nuevo correo de Apunte",
+		Text: fmt.Sprintf("Tu código para confirmar este correo es %s.\n\nCaduca en %d minutos. Si no lo pediste, ignora este correo.",
+			code, int(ttl.Minutes())),
+	}
+}
+
+func emailTakenMail(to string) mailer.Message {
+	return mailer.Message{
+		To:      to,
+		Subject: "Alguien intentó usar tu correo en Apunte",
+		Text:    "Alguien intentó cambiar el correo de una cuenta de Apunte por este, que ya pertenece a otra cuenta. Si no fuiste tú, no tienes que hacer nada.",
+	}
+}
+
+func emailChangedMail(to, newEmail string) mailer.Message {
+	return mailer.Message{
+		To:      to,
+		Subject: "El correo de tu cuenta de Apunte cambió",
+		Text: fmt.Sprintf("El correo de tu cuenta de Apunte cambió a %s. Desde ahora iniciarás sesión con ese correo.\n\n"+
+			"Si no fuiste tú, contacta con soporte de inmediato.", newEmail),
+	}
+}

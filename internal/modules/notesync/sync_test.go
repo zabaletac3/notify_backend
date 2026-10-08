@@ -420,3 +420,19 @@ func TestConcurrentSyncNeverLosesChanges(t *testing.T) {
 		t.Fatalf("seq repetidos: %d %v", dup, err)
 	}
 }
+
+func TestStorageQuotaBlocksUploads(t *testing.T) {
+	// Cada nota de prueba pesa ~60 bytes cifrados: una cuota de 100 admite una y rechaza la segunda.
+	e := newEnv(t, Limits{MaxChanges: 500, MaxNotes: 100, MaxFolders: 10, QuotaBytes: 100})
+	a := e.account("ana@example.com")
+	if r := a.sync(nil, noteUpsert(newID(), 0, nil, sealedPl)); r.Code != 200 {
+		t.Fatalf("primera nota: %s", r)
+	}
+	if r := a.sync(nil, noteUpsert(newID(), 0, nil, sealedPl), noteUpsert(newID(), 0, nil, sealedPl)); r.Code != 403 || r.Body["code"] != "quota-exceeded" {
+		t.Fatalf("pasada la cuota: %s", r)
+	}
+	// Borrar siempre se permite aunque la cuenta esté llena.
+	if r := a.sync(nil, del("note", newID(), 0)); r.Code != 200 {
+		t.Fatalf("borrar con la cuota llena: %s", r)
+	}
+}

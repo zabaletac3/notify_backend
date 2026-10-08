@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/zabaletac3/notify_backend/internal/modules/account"
 	"github.com/zabaletac3/notify_backend/internal/modules/auth"
 	"github.com/zabaletac3/notify_backend/internal/modules/notesync"
 	"github.com/zabaletac3/notify_backend/internal/modules/share"
@@ -74,7 +75,7 @@ func run() error {
 	defer authSvc.Close() // espera a los correos en vuelo
 	authHandler := auth.NewHandler(authSvc, log, cfg.TrustProxy)
 
-	syncSvc := notesync.NewService(pool, notesync.Limits{MaxChanges: cfg.MaxSyncChanges, MaxNotes: cfg.MaxNotes, MaxFolders: cfg.MaxFolders})
+	syncSvc := notesync.NewService(pool, notesync.Limits{MaxChanges: cfg.MaxSyncChanges, MaxNotes: cfg.MaxNotes, MaxFolders: cfg.MaxFolders, QuotaBytes: cfg.QuotaBytes})
 	syncHandler := notesync.NewHandler(syncSvc, log, func(ctx context.Context) (string, string, bool) {
 		p, ok := auth.PrincipalFrom(ctx)
 		return p.UserID, p.DeviceID, ok
@@ -83,11 +84,16 @@ func run() error {
 		p, ok := auth.PrincipalFrom(ctx)
 		return p.UserID, ok
 	}, cfg.TrustProxy)
+	accountHandler := account.NewHandler(account.NewService(pool, cfg.QuotaBytes), log, func(ctx context.Context) (string, bool) {
+		p, ok := auth.PrincipalFrom(ctx)
+		return p.UserID, ok
+	})
 	protected := func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authHandler.Require)
 			syncHandler.Routes(r)
 			shareHandler.PrivateRoutes(r)
+			accountHandler.Routes(r)
 		})
 	}
 

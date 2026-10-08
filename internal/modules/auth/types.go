@@ -99,3 +99,19 @@ type PasswordResetRequest struct {
 	RecoveryAuth string    `json:"recoveryAuth"`
 	Keys         KeyBundle `json:"keys"`
 }
+
+// ── Perfil y cambio de correo ────────────────────────────────────────
+
+type ProfileUpdate struct {
+	FullName string `json:"fullName"`
+}
+
+type EmailChangeRequest struct {
+	NewEmail string `json:"newEmail"`
+	AuthKey  string `json:"authKey"`
+}
+
+type EmailChangeConfirm struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
