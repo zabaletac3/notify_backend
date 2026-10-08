@@ -10,17 +10,18 @@ import (
 )
 
 type userRow struct {
-	ID          string
-	Email       string
-	FullName    string
-	VerifiedAt  *time.Time
-	CreatedAt   time.Time
-	DeletedAt   *time.Time
-	AuthKeyHash []byte
-	Kdf         KdfParams
-	WrappedMK   string
-	RecoveryMK  string
-	KeysVersion int
+	ID               string
+	Email            string
+	FullName         string
+	VerifiedAt       *time.Time
+	CreatedAt        time.Time
+	DeletedAt        *time.Time
+	AuthKeyHash      []byte
+	RecoveryAuthHash []byte
+	Kdf              KdfParams
+	WrappedMK        string
+	RecoveryMK       string
+	KeysVersion      int
 }
 
 func (u *userRow) view() User {
@@ -31,14 +32,14 @@ func (u *userRow) keys() *KeyBundle {
 	return &KeyBundle{Kdf: u.Kdf, WrappedMasterKey: u.WrappedMK, RecoveryWrappedMasterKey: u.RecoveryMK, KeysVersion: u.KeysVersion}
 }
 
-const userCols = `id::text, email, full_name, email_verified_at, created_at, deleted_at, auth_key_hash, kdf, keys, keys_version`
+const userCols = `id::text, email, full_name, email_verified_at, created_at, deleted_at, auth_key_hash, recovery_auth_hash, kdf, keys, keys_version`
 
 func scanUser(row pgx.Row) (*userRow, error) {
 	var (
 		u         userRow
 		kdf, keys []byte
 	)
-	err := row.Scan(&u.ID, &u.Email, &u.FullName, &u.VerifiedAt, &u.CreatedAt, &u.DeletedAt, &u.AuthKeyHash, &kdf, &keys, &u.KeysVersion)
+	err := row.Scan(&u.ID, &u.Email, &u.FullName, &u.VerifiedAt, &u.CreatedAt, &u.DeletedAt, &u.AuthKeyHash, &u.RecoveryAuthHash, &kdf, &keys, &u.KeysVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

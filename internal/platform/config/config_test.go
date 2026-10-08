@@ -42,6 +42,8 @@ func TestLoadFailsClosed(t *testing.T) {
 		"previo igual":     func(t *testing.T) { t.Setenv("JWT_SECRET_PREVIOUS", secretA) },
 		"access largo":     func(t *testing.T) { t.Setenv("ACCESS_TTL", "3h") },
 		"refresh corto":    func(t *testing.T) { t.Setenv("REFRESH_TTL", "1m") },
+		"web sin esquema":  func(t *testing.T) { t.Setenv("WEB_BASE_URL", "app.example.com") },
+		"web con consulta": func(t *testing.T) { t.Setenv("WEB_BASE_URL", "https://app.example.com/?x=1") },
 		"mail desconocido": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "smtp") },
 		"resend sin clave": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "resend") },
 	}
@@ -69,6 +71,11 @@ func TestProdRules(t *testing.T) {
 		t.Fatal("prod exige orígenes https")
 	}
 	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("WEB_BASE_URL", "http://app.example.com")
+	if _, err := Load(); err == nil {
+		t.Fatal("prod exige que la web sea https")
+	}
+	t.Setenv("WEB_BASE_URL", "https://app.example.com")
 	if _, err := Load(); err != nil {
 		t.Fatal(err)
 	}

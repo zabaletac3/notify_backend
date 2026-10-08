@@ -71,3 +71,31 @@ type Principal struct {
 	DeviceID string
 	Expires  time.Time
 }
+
+// ── Claves, contraseña y recuperación ────────────────────────────────────
+
+type PasswordChangeRequest struct {
+	CurrentAuthKey string    `json:"currentAuthKey"`
+	NewAuthKey     string    `json:"newAuthKey"`
+	Keys           KeyBundle `json:"keys"`
+}
+
+type RecoveryKeyRotation struct {
+	AuthKey                  string `json:"authKey"`
+	RecoveryAuth             string `json:"recoveryAuth"`
+	RecoveryWrappedMasterKey string `json:"recoveryWrappedMasterKey"`
+}
+
+type PasswordResetBundle struct {
+	UserID                   string    `json:"userId"`
+	RecoveryWrappedMasterKey string    `json:"recoveryWrappedMasterKey"`
+	Kdf                      KdfParams `json:"kdf"`
+}
+
+type PasswordResetRequest struct {
+	Token        string    `json:"token"`
+	Mode         string    `json:"mode"` // keep | wipe
+	NewAuthKey   string    `json:"newAuthKey"`
+	RecoveryAuth string    `json:"recoveryAuth"`
+	Keys         KeyBundle `json:"keys"`
+}

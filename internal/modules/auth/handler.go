@@ -62,6 +62,9 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Post("/auth/resend-code", h.resendCode)
 	r.Post("/auth/login", h.login)
 	r.Post("/auth/refresh", h.refresh)
+	r.Post("/auth/password/forgot", h.forgot)
+	r.Post("/auth/password/reset/bundle", h.resetBundle)
+	r.Post("/auth/password/reset", h.resetPassword)
 
 	r.Group(func(r chi.Router) {
 		r.Use(h.Require)
@@ -69,6 +72,10 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Get("/auth/session", h.session)
 		r.Get("/devices", h.devices)
 		r.Delete("/devices/{deviceId}", h.removeDevice)
+		r.Get("/keys", h.keys)
+		r.Put("/keys/recovery", h.rotateRecovery)
+		r.Post("/me/password", h.changePassword)
+		r.Delete("/me", h.deleteMe)
 	})
 }
 
@@ -225,4 +232,93 @@ func (h *Handler) removeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.NoContent(w)
+}
+
+func (h *Handler) forgot(w http.ResponseWriter, r *http.Request) {
+	var b emailBody
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.ForgotPassword(r.Context(), h.ip(r), b.Email); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) resetBundle(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Token string `json:"token"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out, err := h.svc.ResetBundle(r.Context(), h.ip(r), b.Token)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var b PasswordResetRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.ResetPassword(r.Context(), h.ip(r), &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.NoContent(w)
+}
+
+func (h *Handler) keys(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	k, err := h.svc.Keys(r.Context(), p)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, k)
+}
+
+func (h *Handler) rotateRecovery(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b RecoveryKeyRotation
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.RotateRecoveryKey(r.Context(), p, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.NoContent(w)
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b PasswordChangeRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.ChangePassword(r.Context(), p, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.NoContent(w)
+}
+
+func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	if err := h.svc.DeleteAccount(r.Context(), p); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
