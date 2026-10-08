@@ -32,3 +32,9 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Anti-enumeración: `register`, `resend-code`, `forgot` y `prelogin` responden igual exista o no la cuenta; el correo se envía en segundo plano (`Service.send`) para no filtrar por tiempo.
 - Sesión: acceso JWT corto + renovación opaca con rotación; reusar un token gastado revoca la familia y el dispositivo. El dispositivo del token (`did`) se comprueba en cada petición (`device-revoked`).
 - La API no puede borrar usuarios; solo `discard_unverified_user()` (migración 00004) elimina registros sin verificar.
+
+## Claves y recuperación
+- `ChangePassword` re-envuelve la clave maestra (no toca las notas) y conserva la `recoveryWrappedMasterKey` guardada; `RotateRecoveryKey` cambia solo la de recuperación. Ambas exigen la prueba de la contraseña con límite de fallos (`sensitive:<userId>`).
+- Restablecer: `forgot` (token de 256 bits, hash SHA-256, 1 h, un solo uso) → `reset/bundle` → `reset` con `keep` (exige `recoveryAuth` vigente; 5 intentos/h por cuenta) o `wipe` (borra notas, carpetas, enlaces y lápidas **de esa cuenta** con RLS). Ambos cierran todas las sesiones y recuperan una cuenta en periodo de gracia.
+- Cada cambio de credenciales deja un evento en `audit_log` y avisa por correo al dueño.
+- `DELETE /me` solo marca `deleted_at` y cierra sesiones; la purga definitiva (30 días) llega en la fase 8.

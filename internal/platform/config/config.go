@@ -31,6 +31,9 @@ type Config struct {
 	RefreshTTL        time.Duration `env:"REFRESH_TTL" envDefault:"720h"`
 	Pepper            string        `env:"PEPPER,required,notEmpty"`
 
+	// Dirección pública de la web: los enlaces de los correos (restablecer contraseña) apuntan aquí.
+	WebBaseURL string `env:"WEB_BASE_URL" envDefault:"http://localhost:5173"`
+
 	// Orígenes permitidos por CORS (lista separada por comas, sin comodines).
 	AllowedOrigins []string `env:"ALLOWED_ORIGINS" envSeparator:","`
 
@@ -131,6 +134,9 @@ func (c *Config) Validate() error {
 	default:
 		add("MAIL_PROVIDER desconocido: %q", c.Mail.Provider)
 	}
+	if !validWebBase(c.WebBaseURL, c.IsProd()) {
+		add("WEB_BASE_URL no es válida (en prod debe ser https y sin ruta)")
+	}
 	if c.IsProd() {
 		if len(c.AllowedOrigins) == 0 {
 			add("ALLOWED_ORIGINS es obligatoria en prod")
@@ -142,4 +148,13 @@ func (c *Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// validWebBase: URL base de la web, sin ruta ni consulta; https obligatorio en prod.
+func validWebBase(raw string, prod bool) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.RawQuery != "" || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && !prod)
 }

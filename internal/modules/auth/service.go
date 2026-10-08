@@ -36,6 +36,7 @@ type Config struct {
 	Pepper     []byte
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
+	WebBaseURL string
 }
 
 // Deps agrupa las dependencias; todas son obligatorias.

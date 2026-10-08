@@ -57,7 +57,7 @@ func newEnv(t *testing.T) *env {
 	limiter := ratelimit.New(db.App, pepper)
 	limiter.Now = func() time.Time { return e.now }
 	e.svc = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: e.mail, Log: log,
-		Config: auth.Config{Pepper: pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour},
+		Config: auth.Config{Pepper: pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour, WebBaseURL: "http://web.test"},
 		Now:    func() time.Time { return e.now }})
 	t.Cleanup(e.svc.Close)
 	h := auth.NewHandler(e.svc, log, true)
