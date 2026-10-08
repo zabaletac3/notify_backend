@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main, develop]
+  # Diario: un cambio solo en el openapi.yaml de la web no dispara este workflow.
+  schedule:
+    - cron: "17 4 * * *"
 permissions:
   contents: read
 jobs:
@@ -20,18 +23,65 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      OPENAPI_PATH: ${{ github.workspace }}/notify_web/docs/api/openapi.yaml
+    defaults:
+      run:
+        working-directory: notify_backend
     steps:
+      # Los dos repos se clonan como carpetas hermanas (notify_backend/ y notify_web/),
+      # igual que en local, para que internal/contract encuentre el contrato.
       - uses: actions/checkout@v7
+        with:
+          path: notify_backend
+      - uses: actions/checkout@v7
+        with:
+          repository: zabaletac3/notify_web
+          ref: main
+          path: notify_web
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version-file: notify_backend/go.mod
       - run: go mod verify
       - run: go vet ./...
       - run: go test -race -cover ./...
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+          working-directory: notify_backend
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+  # Compara las rutas del router con el contrato de la web. En CI no se puede
+  # omitir: sin openapi.yaml el test falla (CI=true).
+  contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
+    env:
+      CI: "true"
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      OPENAPI_PATH: ${{ github.workspace }}/notify_web/docs/api/openapi.yaml
+    defaults:
+      run:
+        working-directory: notify_backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: notify_backend
+      - uses: actions/checkout@v7
+        with:
+          repository: zabaletac3/notify_web
+          ref: main
+          path: notify_web
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: notify_backend/go.mod
+      - run: go test ./internal/contract/...
   docker:
     runs-on: ubuntu-latest
     steps:
