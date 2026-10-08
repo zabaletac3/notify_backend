@@ -1,6 +1,6 @@
 module github.com/zabaletac3/notify_backend
 
-go 1.26.8
+go 1.26.9
 
 require (
 	github.com/caarlos0/env/v11 v11.4.1
