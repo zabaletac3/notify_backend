@@ -45,3 +45,9 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - El dispositivo es el del token (`did`); `deviceId`/`deviceName` del cuerpo se ignoran. Un id que pertenece a otra cuenta da 422 sin detalles (RLS + PK global).
 - Límites por configuración: `MAX_SYNC_BODY_BYTES` (8 MiB, solo `/v1/sync`), `MAX_SYNC_CHANGES`, `MAX_NOTES_PER_ACCOUNT`, `MAX_FOLDERS_PER_ACCOUNT` (`forbidden/limit-reached`).
 - Los módulos no se importan entre sí: `notesync` recibe una `PrincipalFunc` y el middleware de auth se aplica en `main`.
+
+## Compartir (`internal/modules/share`)
+- El cliente cifra una copia de la nota con la clave del enlace y elige el `slug` (22 caracteres); la clave va en el fragmento de la URL y nunca llega al servidor. Un `PUT` sobre una nota que ya tiene enlace devuelve el existente.
+- Lectura pública (`GET /v1/public/notes/{slug}`) por `database.WithPublicSlug` (RLS: solo `SELECT` de ese slug): solo devuelve `{payload, updatedAt}`; enlace inexistente, revocado o con forma inválida dan el mismo 404; límite por IP; `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`.
+- Mover una nota a la papelera (`deletedAt`) o borrarla por `/sync` elimina su enlace; la clave foránea con `ON DELETE CASCADE` cubre el borrado de la nota.
+- `internal/testutil` monta la API completa para las pruebas de integración de los módulos.

@@ -12,6 +12,7 @@ import (
 
 	"github.com/zabaletac3/notify_backend/internal/modules/auth"
 	"github.com/zabaletac3/notify_backend/internal/modules/notesync"
+	"github.com/zabaletac3/notify_backend/internal/modules/share"
 	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"github.com/zabaletac3/notify_backend/internal/platform/database"
 	"github.com/zabaletac3/notify_backend/internal/platform/httpserver"
@@ -78,14 +79,19 @@ func run() error {
 		p, ok := auth.PrincipalFrom(ctx)
 		return p.UserID, p.DeviceID, ok
 	})
+	shareHandler := share.NewHandler(share.NewService(pool, limiter), log, func(ctx context.Context) (string, bool) {
+		p, ok := auth.PrincipalFrom(ctx)
+		return p.UserID, ok
+	}, cfg.TrustProxy)
 	protected := func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authHandler.Require)
 			syncHandler.Routes(r)
+			shareHandler.PrivateRoutes(r)
 		})
 	}
 
-	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool, authHandler.Routes, protected))
+	srv := httpserver.New(cfg, httpserver.NewRouter(cfg, log, pool, authHandler.Routes, protected, shareHandler.PublicRoutes))
 	log.Info("api escuchando", "port", cfg.Port, "mail", cfg.Mail.Provider)
 	return httpserver.Serve(ctx, srv, cfg.ShutdownTimeout)
 }

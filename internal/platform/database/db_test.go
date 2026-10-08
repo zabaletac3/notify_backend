@@ -266,7 +266,7 @@ func TestPublicShareReadIsScoped(t *testing.T) {
 					return err
 				}
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, payload) VALUES ($1, $2, $3, $4)`, s, nid, a, sealed); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, wrapped_key, payload) VALUES ($1, $2, $3, $4, $4)`, s, nid, a, sealed); err != nil {
 				return err
 			}
 		}
@@ -307,7 +307,7 @@ func TestShareLinkDiesWithNote(t *testing.T) {
 		if err := insertNote(tx, note, a); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, payload) VALUES ($1, $2, $3, $4)`, slug, note, a, sealed); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, wrapped_key, payload) VALUES ($1, $2, $3, $4, $4)`, slug, note, a, sealed); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `DELETE FROM notes WHERE id = $1`, note)
@@ -345,7 +345,7 @@ func TestCheckConstraintsRejectBadData(t *testing.T) {
 	if _, err := db.Admin.Exec(ctx, `INSERT INTO users (id, email, full_name, kdf, auth_key_hash, keys) VALUES (gen_random_uuid(), 'Ana@Example.com', 'Test', '{}', '\x01', '{}')`); pgCode(err) != "23514" {
 		t.Errorf("correo en mayúsculas aceptado: %v", err)
 	}
-	if _, err := db.Admin.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, payload) VALUES ('corto', gen_random_uuid(), $1, $2)`, a, sealed); pgCode(err) != "23514" {
+	if _, err := db.Admin.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, wrapped_key, payload) VALUES ('corto', gen_random_uuid(), $1, $2, $2)`, a, sealed); pgCode(err) != "23514" {
 		t.Errorf("slug corto aceptado: %v", err)
 	}
 	// Tamaño máximo de carpeta.

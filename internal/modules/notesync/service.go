@@ -156,6 +156,12 @@ func (s *Service) applyNote(ctx context.Context, tx pgx.Tx, p Principal, c parse
 	}
 
 	n := c.note
+	if n.DeletedAt != nil {
+		// Una nota en la papelera deja de ser pública: se revoca su enlace.
+		if _, err := tx.Exec(ctx, `DELETE FROM share_links WHERE note_id = $1`, c.ID); err != nil {
+			return err
+		}
+	}
 	if !exists {
 		seq, err := nextSeq(ctx, tx)
 		if err != nil {
