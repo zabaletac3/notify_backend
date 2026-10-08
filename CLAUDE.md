@@ -56,3 +56,8 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - `/me` (GET/PATCH) y el cambio de correo viven en `auth`: `POST /me/email-change` exige la prueba de la contraseña, envía el código **al correo nuevo** (y si ya tiene cuenta responde igual y avisa a su dueño); `confirm` aplica el cambio y avisa al correo anterior. El código está ligado a la cuenta y al correo nuevo.
 - `account`: `/settings` (valores por defecto como la web; PATCH estricto; `twoFactor: true` se rechaza hasta que exista la verificación en dos pasos) y `/storage/usage` (suma `pg_column_size` de lo cifrado; `QUOTA_BYTES`).
 - La cuota se aplica en `/sync` (`403 forbidden/quota-exceeded`); borrar siempre se permite.
+
+## Operación (`docs/operations.md`)
+- Cuatro roles de BD: owner (migraciones), API (RLS), purga (`apunte_maint`) y copias (`BYPASSRLS` solo lectura). Nunca usar el de migraciones ni el de copias en la API.
+- `cmd/purge` (idempotente, por lotes) y `deploy/backup.sh` + `restore-test.sh`; temporizadores systemd en `deploy/`. Los trabajos avisan a un servicio de «latido» (`*_PING_URL`) para alertar si dejan de ejecutarse.
+- Las migraciones nuevas que añadan tablas con datos de personas deben decidir su política de purga y, si tienen RLS, su política para `apunte_maint`.

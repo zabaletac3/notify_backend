@@ -22,6 +22,7 @@ import (
 type DB struct {
 	Admin *pgxpool.Pool // dueño de las tablas (omite RLS)
 	App   *pgxpool.Pool // rol de la API: sujeto a permisos y RLS
+	Maint *pgxpool.Pool // rol de mantenimiento (purga): miembro de apunte_maint
 }
 
 // New crea la base, aplica las migraciones y devuelve los pools. Se limpia sola al terminar.
@@ -51,18 +52,27 @@ func New(t *testing.T) *DB {
 	_, err = root.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s' IN ROLE apunte_app`, role, pass))
 	must(t, err)
 
+	maintRole := "apunte_maint_" + suffix
+	_, err = root.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s' IN ROLE apunte_maint`, maintRole, pass))
+	must(t, err)
+
 	admin, err := pgxpool.New(ctx, dbURL)
 	must(t, err)
 	app, err := pgxpool.New(ctx, withDB(t, adminURL, dbName, role, pass))
 	must(t, err)
 
+	maint, err := pgxpool.New(ctx, withDB(t, adminURL, dbName, maintRole, pass))
+	must(t, err)
+
 	t.Cleanup(func() {
+		maint.Close()
 		app.Close()
 		admin.Close()
 		_, _ = root.Exec(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %q WITH (FORCE)`, dbName))
 		_, _ = root.Exec(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS %q`, role))
+		_, _ = root.Exec(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS %q`, maintRole))
 	})
-	return &DB{Admin: admin, App: app}
+	return &DB{Admin: admin, App: app, Maint: maint}
 }
 
 func withDB(t *testing.T, raw, db, user, pass string) string {
