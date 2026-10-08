@@ -58,3 +58,14 @@ func inTx(ctx context.Context, pool *pgxpool.Pool, settings map[string]string, f
 	}
 	return nil
 }
+
+// SetUser cambia la cuenta de la transacción en curso (p. ej. cuando solo se sabe quién es tras leer
+// un token de renovación). El valor sigue limitado a la transacción.
+func SetUser(ctx context.Context, tx pgx.Tx, userID string) error {
+	id, err := uuid.Parse(userID)
+	if err != nil {
+		return ErrInvalidUser
+	}
+	_, err = tx.Exec(ctx, "SELECT set_config('app.user_id', $1, true)", id.String())
+	return err
+}

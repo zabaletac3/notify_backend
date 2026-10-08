@@ -1,53 +1,54 @@
-// Package response escribe el envoltorio JSON común de la API.
+// Package response escribe las respuestas JSON de la API: el cuerpo es el del contrato
+// (docs/api/openapi.yaml), sin envoltorio, y los errores tienen la forma de `AppError`.
 package response
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/zabaletac3/notify_backend/internal/platform/apperrors"
 )
 
-type SuccessEnvelope struct {
-	Success    bool   `json:"success"`
-	Data       any    `json:"data"`
-	StatusCode int    `json:"statusCode"`
-	Timestamp  string `json:"timestamp"`
-	Path       string `json:"path"`
-}
-
-type ErrorEnvelope struct {
-	Success    bool   `json:"success"`
-	StatusCode int    `json:"statusCode"`
-	Timestamp  string `json:"timestamp"`
-	Path       string `json:"path"`
-	Message    string `json:"message"`
-}
-
 func write(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	if body != nil {
+		_ = json.NewEncoder(w).Encode(body)
+	}
 }
 
-// Success responde con el envoltorio de éxito.
-func Success(w http.ResponseWriter, r *http.Request, status int, data any) {
-	write(w, status, SuccessEnvelope{
-		Success: true, Data: data, StatusCode: status,
-		Timestamp: time.Now().UTC().Format(time.RFC3339), Path: r.URL.Path,
-	})
+// JSON responde con el cuerpo tal cual.
+func JSON(w http.ResponseWriter, status int, body any) { write(w, status, body) }
+
+// NoContent responde 204 sin cuerpo.
+func NoContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }
+
+type errorBody struct {
+	Kind          apperrors.Kind    `json:"kind"`
+	Code          string            `json:"code,omitempty"`
+	Fields        map[string]string `json:"fields,omitempty"`
+	Entity        string            `json:"entity,omitempty"`
+	RetryAfterSec int               `json:"retryAfterSec,omitempty"`
 }
 
-// Error responde con un mensaje ya seguro para mostrar.
-func Error(w http.ResponseWriter, r *http.Request, status int, message string) {
-	write(w, status, ErrorEnvelope{
-		Success: false, StatusCode: status, Message: message,
-		Timestamp: time.Now().UTC().Format(time.RFC3339), Path: r.URL.Path,
-	})
-}
-
-// Fail traduce un error de dominio a respuesta, sin exponer detalles internos.
-func Fail(w http.ResponseWriter, r *http.Request, err error) {
-	Error(w, r, apperrors.HTTPStatus(err), apperrors.PublicMessage(err))
+// Error responde con el error del contrato. Los errores internos se registran (si hay logger) y el
+// cliente solo recibe {kind:"server"}: nunca la causa.
+func Error(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
+	e := apperrors.As(err)
+	if e.Err != nil && log != nil {
+		log.ErrorContext(r.Context(), "request failed", "kind", string(e.Kind), "path", r.URL.Path, "err", e.Err.Error())
+	}
+	body := errorBody{Kind: e.Kind, Code: e.Code, Fields: e.Fields, Entity: e.Entity}
+	if e.Kind == apperrors.KindRateLimited {
+		secs := int((e.RetryAfter + time.Second - 1) / time.Second)
+		if secs < 1 {
+			secs = 1
+		}
+		body.RetryAfterSec = secs
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+	}
+	write(w, e.HTTPStatus(), body)
 }

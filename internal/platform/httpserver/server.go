@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
 
+	"github.com/zabaletac3/notify_backend/internal/platform/apperrors"
 	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"github.com/zabaletac3/notify_backend/internal/platform/response"
 )
@@ -22,7 +23,7 @@ type Pinger interface {
 }
 
 // NewRouter arma el router base. Los módulos montan sus rutas sobre él (fases siguientes).
-func NewRouter(cfg *config.Config, log *slog.Logger, db Pinger) *chi.Mux {
+func NewRouter(cfg *config.Config, log *slog.Logger, db Pinger, modules ...func(chi.Router)) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(TraceID, Recover(log), Logging(log), SecurityHeaders, MaxBody(cfg.MaxBodyBytes))
 	r.Use(cors.Handler(cors.Options{
@@ -37,11 +38,17 @@ func NewRouter(cfg *config.Config, log *slog.Logger, db Pinger) *chi.Mux {
 	r.Get("/health", Live)
 	r.Get("/ready", Ready(db))
 
+	r.Route("/v1", func(v1 chi.Router) {
+		for _, mount := range modules {
+			mount(v1)
+		}
+	})
+
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		response.Error(w, r, http.StatusNotFound, "resource not found")
+		response.Error(w, r, nil, apperrors.NotFound(""))
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		response.Error(w, r, http.StatusMethodNotAllowed, "method not allowed")
+		response.Error(w, r, nil, &apperrors.Error{Kind: apperrors.KindValidation, Status: http.StatusMethodNotAllowed, Fields: map[string]string{"method": "invalid-payload"}})
 	})
 	return r
 }

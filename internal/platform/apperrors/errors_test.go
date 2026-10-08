@@ -5,30 +5,38 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestHTTPStatus(t *testing.T) {
-	cases := map[error]int{
-		ErrNotFound:           http.StatusNotFound,
-		ErrInvalidInput:       http.StatusBadRequest,
-		ErrConflict:           http.StatusConflict,
-		ErrUnauthorized:       http.StatusUnauthorized,
-		ErrInvalidCredentials: http.StatusUnauthorized,
-		ErrForbidden:          http.StatusForbidden,
-		ErrTooManyRequests:    http.StatusTooManyRequests,
-		ErrPayloadTooLarge:    http.StatusRequestEntityTooLarge,
-		ErrServiceUnavailable: http.StatusServiceUnavailable,
-		errors.New("boom"):    http.StatusInternalServerError,
+	cases := map[*Error]int{
+		Unauthorized("x"):               http.StatusUnauthorized,
+		InvalidCredentials():            http.StatusUnauthorized,
+		SessionExpired():                http.StatusUnauthorized,
+		DeviceRevoked():                 http.StatusUnauthorized,
+		Forbidden("email-not-verified"): http.StatusForbidden,
+		NotFound("note"):                http.StatusNotFound,
+		Validation(nil):                 http.StatusUnprocessableEntity,
+		Conflict("x"):                   http.StatusConflict,
+		RateLimited(time.Second):        http.StatusTooManyRequests,
+		Internal(errors.New("x")):       http.StatusInternalServerError,
+		Unavailable(nil):                http.StatusServiceUnavailable,
+		PayloadTooLarge():               http.StatusRequestEntityTooLarge,
 	}
-	for err, want := range cases {
-		if got := HTTPStatus(fmt.Errorf("envuelto: %w", err)); got != want {
-			t.Errorf("%v: got %d, want %d", err, got, want)
+	for e, want := range cases {
+		if got := e.HTTPStatus(); got != want {
+			t.Errorf("%s: got %d, want %d", e.Kind, got, want)
 		}
 	}
 }
 
-func TestPublicMessageHidesInternals(t *testing.T) {
-	if got := PublicMessage(errors.New("password=hunter2 failed")); got != "internal server error" {
-		t.Fatalf("filtró detalles internos: %q", got)
+func TestAsWrapsUnknownAsInternal(t *testing.T) {
+	e := As(fmt.Errorf("conn postgres://u:p@h: %w", errors.New("boom")))
+	if e.Kind != KindServer || e.Err == nil {
+		t.Fatalf("%+v", e)
+	}
+	known := fmt.Errorf("envuelto: %w", NotFound("note"))
+	if As(known).Kind != KindNotFound {
+		t.Fatal("As no encuentra el error envuelto")
 	}
 }

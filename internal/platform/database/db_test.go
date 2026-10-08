@@ -22,7 +22,7 @@ func newUser(t *testing.T, db *testdb.DB, email string) string {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7()).String()
 	_, err := db.Admin.Exec(ctx,
-		`INSERT INTO users (id, email, kdf, auth_key_hash, keys) VALUES ($1, $2, '{}', '\x01', '{}')`, id, email)
+		`INSERT INTO users (id, email, full_name, kdf, auth_key_hash, keys) VALUES ($1, $2, 'Test', '{}', '\x01', '{}')`, id, email)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestCheckConstraintsRejectBadData(t *testing.T) {
 		}
 	}
 	// Correo en mayúsculas y slug de longitud incorrecta.
-	if _, err := db.Admin.Exec(ctx, `INSERT INTO users (id, email, kdf, auth_key_hash, keys) VALUES (gen_random_uuid(), 'Ana@Example.com', '{}', '\x01', '{}')`); pgCode(err) != "23514" {
+	if _, err := db.Admin.Exec(ctx, `INSERT INTO users (id, email, full_name, kdf, auth_key_hash, keys) VALUES (gen_random_uuid(), 'Ana@Example.com', 'Test', '{}', '\x01', '{}')`); pgCode(err) != "23514" {
 		t.Errorf("correo en mayúsculas aceptado: %v", err)
 	}
 	if _, err := db.Admin.Exec(ctx, `INSERT INTO share_links (slug, note_id, user_id, payload) VALUES ('corto', gen_random_uuid(), $1, $2)`, a, sealed); pgCode(err) != "23514" {
@@ -398,5 +398,25 @@ func TestUserContextDoesNotLeakThroughThePool(t *testing.T) {
 	var v string
 	if err := one.QueryRow(ctx, `SELECT coalesce(current_setting('app.user_id', true), '')`).Scan(&v); err != nil || v != "" {
 		t.Fatalf("app.user_id se filtró a la conexión: %q %v", v, err)
+	}
+}
+
+func TestDiscardUnverifiedOnlyTouchesUnverified(t *testing.T) {
+	db := testdb.New(t)
+	verified := newUser(t, db, "ok@example.com")
+	if _, err := db.Admin.Exec(ctx, `UPDATE users SET email_verified_at = now() WHERE id = $1`, verified); err != nil {
+		t.Fatal(err)
+	}
+	newUser(t, db, "pending@example.com")
+	var n int
+	if err := db.App.QueryRow(ctx, `SELECT discard_unverified_user('ok@example.com')`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("borró una cuenta verificada: %d %v", n, err)
+	}
+	if err := db.App.QueryRow(ctx, `SELECT discard_unverified_user('pending@example.com')`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("no borró la cuenta sin verificar: %d %v", n, err)
+	}
+	var left int
+	if err := db.Admin.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&left); err != nil || left != 1 {
+		t.Fatalf("quedan %d cuentas", left)
 	}
 }

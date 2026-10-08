@@ -1,52 +1,110 @@
-// Package apperrors define los errores de dominio y su correspondencia con HTTP.
+// Package apperrors define los errores que la API entrega al cliente. Su forma JSON es la del
+// `AppError` de la web (docs/api/openapi.yaml, esquema Error): {kind, code?, fields?, ...}.
 package apperrors
 
 import (
 	"errors"
 	"net/http"
+	"time"
 )
 
-var (
-	ErrNotFound           = errors.New("resource not found")
-	ErrInvalidInput       = errors.New("invalid input")
-	ErrConflict           = errors.New("resource conflict")
-	ErrUnauthorized       = errors.New("missing or invalid credentials")
-	ErrForbidden          = errors.New("forbidden")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrTooManyRequests    = errors.New("too many requests, try again later")
-	ErrPayloadTooLarge    = errors.New("payload too large")
-	ErrServiceUnavailable = errors.New("service temporarily unavailable")
+// Kind es la categoría del error, igual que `AppError['kind']` en el cliente.
+type Kind string
+
+const (
+	KindServer         Kind = "server"
+	KindUnauthorized   Kind = "unauthorized"
+	KindForbidden      Kind = "forbidden"
+	KindSessionExpired Kind = "session-expired"
+	KindDeviceRevoked  Kind = "device-revoked"
+	KindNotFound       Kind = "not-found"
+	KindValidation     Kind = "validation"
+	KindConflict       Kind = "conflict"
+	KindRateLimited    Kind = "rate-limited"
 )
 
-// HTTPStatus traduce un error a su código HTTP. Lo desconocido es 500.
-func HTTPStatus(err error) int {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, ErrInvalidInput):
-		return http.StatusBadRequest
-	case errors.Is(err, ErrConflict):
-		return http.StatusConflict
-	case errors.Is(err, ErrUnauthorized), errors.Is(err, ErrInvalidCredentials):
+// Error es el único error que llega al cliente. Err guarda la causa interna: se registra en el log
+// y nunca se serializa.
+type Error struct {
+	Kind       Kind
+	Code       string
+	Fields     map[string]string
+	Entity     string
+	RetryAfter time.Duration
+	Status     int // anula el estado HTTP que corresponde al Kind (p. ej. 413)
+	Err        error
+}
+
+func (e *Error) Error() string {
+	if e.Err != nil {
+		return string(e.Kind) + ": " + e.Err.Error()
+	}
+	return string(e.Kind)
+}
+
+func (e *Error) Unwrap() error { return e.Err }
+
+// HTTPStatus es el código HTTP del error.
+func (e *Error) HTTPStatus() int {
+	if e.Status != 0 {
+		return e.Status
+	}
+	switch e.Kind {
+	case KindUnauthorized, KindSessionExpired, KindDeviceRevoked:
 		return http.StatusUnauthorized
-	case errors.Is(err, ErrForbidden):
+	case KindForbidden:
 		return http.StatusForbidden
-	case errors.Is(err, ErrTooManyRequests):
+	case KindNotFound:
+		return http.StatusNotFound
+	case KindValidation:
+		return http.StatusUnprocessableEntity
+	case KindConflict:
+		return http.StatusConflict
+	case KindRateLimited:
 		return http.StatusTooManyRequests
-	case errors.Is(err, ErrPayloadTooLarge):
-		return http.StatusRequestEntityTooLarge
-	case errors.Is(err, ErrServiceUnavailable):
-		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}
 }
 
-// PublicMessage es el texto que puede ver quien llama. Los errores desconocidos
-// nunca exponen detalles internos.
-func PublicMessage(err error) string {
-	if HTTPStatus(err) == http.StatusInternalServerError {
-		return "internal server error"
+// Constructores.
+
+func Unauthorized(code string) *Error { return &Error{Kind: KindUnauthorized, Code: code} }
+func InvalidCredentials() *Error      { return Unauthorized("invalid-credentials") }
+func Forbidden(code string) *Error    { return &Error{Kind: KindForbidden, Code: code} }
+func SessionExpired() *Error          { return &Error{Kind: KindSessionExpired} }
+func DeviceRevoked() *Error           { return &Error{Kind: KindDeviceRevoked} }
+func NotFound(entity string) *Error   { return &Error{Kind: KindNotFound, Entity: entity} }
+func Conflict(code string) *Error     { return &Error{Kind: KindConflict, Code: code} }
+
+// Validation: campo → código de validación (ver ValidationCode en el contrato).
+func Validation(fields map[string]string) *Error {
+	return &Error{Kind: KindValidation, Fields: fields}
+}
+
+// RateLimited incluye cuánto falta para reintentar.
+func RateLimited(retryAfter time.Duration) *Error {
+	return &Error{Kind: KindRateLimited, RetryAfter: retryAfter}
+}
+
+// Internal envuelve un fallo inesperado; el cliente solo ve {kind:"server"}.
+func Internal(err error) *Error { return &Error{Kind: KindServer, Err: err} }
+
+// Unavailable: una dependencia necesaria (base de datos, limitador) no responde; se falla cerrado.
+func Unavailable(err error) *Error {
+	return &Error{Kind: KindServer, Status: http.StatusServiceUnavailable, Err: err}
+}
+
+// PayloadTooLarge: el cuerpo supera el límite.
+func PayloadTooLarge() *Error {
+	return &Error{Kind: KindValidation, Status: http.StatusRequestEntityTooLarge, Fields: map[string]string{"body": "invalid-payload"}}
+}
+
+// As convierte cualquier error en *Error; lo desconocido pasa a ser un error interno.
+func As(err error) *Error {
+	var e *Error
+	if errors.As(err, &e) {
+		return e
 	}
-	return err.Error()
+	return Internal(err)
 }
