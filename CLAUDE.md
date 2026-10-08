@@ -12,3 +12,9 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 
 ## Comandos
 `make up` (Postgres) · `make run` · `make test` · `make lint` · `make vuln`
+
+## Base de datos
+- Migraciones en `migrations/` (goose, embebidas; `make migrate`). Solo hacia adelante y compatibles hacia atrás.
+- Tres roles: `apunte_owner` (migraciones), `apunte_api` (la API, sin DDL, sujeto a RLS) y, en la fase 8, uno de mantenimiento para la purga. Ver `deploy/db-roles.sql`.
+- Las tablas con datos de personas tienen **RLS**: toda consulta de la API pasa por `database.WithUser` (fija `app.user_id` por transacción). Antes de autenticar se usa `WithoutUser`; el enlace público usa `WithPublicSlug`. Nunca `SET` sin `LOCAL`.
+- Pruebas de integración: `TEST_DATABASE_URL` (administrador). Sin ella se omiten en local y fallan en CI. `make up && make test-db`.
