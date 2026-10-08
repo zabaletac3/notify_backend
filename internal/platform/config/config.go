@@ -24,10 +24,19 @@ type Config struct {
 
 	// Secretos (≥ 32 caracteres). El pepper endurece el hash de authKey (fase 2).
 	JWTSecret string `env:"JWT_SECRET,required,notEmpty"`
-	Pepper    string `env:"PEPPER,required,notEmpty"`
+	// Secreto anterior: solo durante una rotación (los tokens firmados con él valen hasta caducar).
+	JWTSecretPrevious string        `env:"JWT_SECRET_PREVIOUS"`
+	JWTIssuer         string        `env:"JWT_ISSUER" envDefault:"apunte-api"`
+	AccessTTL         time.Duration `env:"ACCESS_TTL" envDefault:"15m"`
+	RefreshTTL        time.Duration `env:"REFRESH_TTL" envDefault:"720h"`
+	Pepper            string        `env:"PEPPER,required,notEmpty"`
 
 	// Orígenes permitidos por CORS (lista separada por comas, sin comodines).
 	AllowedOrigins []string `env:"ALLOWED_ORIGINS" envSeparator:","`
+
+	// TrustProxy: la API va detrás de Caddy, que añade la IP real al final de X-Forwarded-For.
+	// Con false (dev) se usa la dirección de la conexión y se ignora la cabecera.
+	TrustProxy bool `env:"TRUST_PROXY" envDefault:"false"`
 
 	MaxBodyBytes    int64         `env:"MAX_BODY_BYTES" envDefault:"1048576"`
 	ReadTimeout     time.Duration `env:"READ_TIMEOUT" envDefault:"15s"`
@@ -78,6 +87,20 @@ func (c *Config) Validate() error {
 	}
 	if c.JWTSecret != "" && c.JWTSecret == c.Pepper {
 		add("JWT_SECRET y PEPPER deben ser distintos")
+	}
+	if c.JWTSecretPrevious != "" {
+		if len(c.JWTSecretPrevious) < minSecretLen {
+			add("JWT_SECRET_PREVIOUS debe tener al menos %d caracteres", minSecretLen)
+		}
+		if c.JWTSecretPrevious == c.JWTSecret || c.JWTSecretPrevious == c.Pepper {
+			add("JWT_SECRET_PREVIOUS debe ser distinto de JWT_SECRET y PEPPER")
+		}
+	}
+	if c.AccessTTL <= 0 || c.AccessTTL > time.Hour {
+		add("ACCESS_TTL debe estar entre 1 ns y 1 h")
+	}
+	if c.RefreshTTL < c.AccessTTL || c.RefreshTTL > 90*24*time.Hour {
+		add("REFRESH_TTL debe ser mayor que ACCESS_TTL y como máximo 90 días")
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		add("PORT fuera de rango")
