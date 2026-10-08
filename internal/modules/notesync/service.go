@@ -236,7 +236,7 @@ func putTombstone(ctx context.Context, tx pgx.Tx, entity, id string, revision in
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO tombstones (user_id, entity, id, revision, seq) VALUES (app_user_id(), $1, $2, $3, $4)
-		ON CONFLICT (user_id, entity, id) DO UPDATE SET revision = EXCLUDED.revision, seq = EXCLUDED.seq`, entity, id, revision, seq)
+		ON CONFLICT (user_id, entity, id) DO UPDATE SET revision = EXCLUDED.revision, seq = EXCLUDED.seq, created_at = now()`, entity, id, revision, seq)
 	return err
 }
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Purga diaria de Apunte (papelera, cuentas eliminadas, sesiones caducadas)
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/apunte/purge.env
+# La misma imagen que la API; el binario de la purga viene dentro.
+ExecStart=/usr/bin/docker run --rm --env-file /etc/apunte/purge.env --network apunte_internal --entrypoint /purge ghcr.io/zabaletac3/notify_backend:${IMAGE_TAG}
+NoNewPrivileges=true
