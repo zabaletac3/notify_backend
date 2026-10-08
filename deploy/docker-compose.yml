@@ -1,0 +1,83 @@
+# Una pila por ambiente (qa / prod) en el mismo servidor: proyectos, redes, volúmenes y secretos distintos.
+# Se levanta con deploy/release.sh, que pasa `--env-file /etc/apunte/<ambiente>.env`.
+#
+#   edge      red compartida con Caddy (única con salida a internet y a la que Caddy llega).
+#   internal  red SOLO de la pila: la base de datos vive aquí, sin salida a internet y sin puertos publicados.
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:17
+    # Para Postgres no es viable read_only sin más ajustes: se deja escribible solo en su volumen y /run.
+    read_only: false
+    environment:
+      POSTGRES_DB: apunte
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums --auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks: [internal]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d apunte"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    pids_limit: 200
+
+  # Migraciones: se ejecutan como apunte_owner antes de arrancar la API. Una sola vez por despliegue.
+  migrate:
+    <<: *hardening
+    image: ghcr.io/zabaletac3/notify_backend:${IMAGE_TAG:?falta IMAGE_TAG}
+    restart: "no"
+    entrypoint: ["/migrate"]
+    command: ["up"]
+    environment:
+      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL:?falta MIGRATE_DATABASE_URL}
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [internal]
+    mem_limit: 256m
+
+  api:
+    <<: *hardening
+    image: ghcr.io/zabaletac3/notify_backend:${IMAGE_TAG:?falta IMAGE_TAG}
+    # Solo las variables de la API: nunca las credenciales del dueño del esquema ni del superusuario.
+    env_file: ${API_ENV_FILE:?falta API_ENV_FILE}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks:
+      internal: {}
+      edge:
+        aliases: ["api-${ENV_NAME:?falta ENV_NAME}"]
+    healthcheck:
+      test: ["CMD", "/api", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    mem_limit: 512m
+    pids_limit: 200
+    # Sin `ports:`: solo Caddy llega a la API, por la red `edge`.
+
+networks:
+  internal:
+    internal: true
+  edge:
+    external: true
+    name: apunte_edge
+
+volumes:
+  pg_data: {}

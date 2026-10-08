@@ -1,0 +1,8 @@
+# Ajustes de producción: más recursos para la base de datos.
+name: apunte-prod
+services:
+  api:
+    mem_limit: 512m
+  postgres:
+    mem_limit: 768m
+    shm_size: 128m

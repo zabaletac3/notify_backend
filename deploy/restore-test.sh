@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
-# Prueba de restauración (hazla una vez al mes, idealmente en el servidor de QA): restaura la última
-# copia en una base de datos nueva y comprueba que tiene datos coherentes. Una copia que nunca se
-# restauró no es una copia.
+# Prueba de restauración (hazla una vez al mes, en el PostgreSQL de QA): restaura la última copia de prod en una
+# base temporal, comprueba que tiene datos coherentes y la borra. Una copia que nunca se restauró no es una copia.
+# (Los datos de prod son texto cifrado de extremo a extremo; aun así, no los dejes en QA: el script los borra.)
 #
-#   RESTORE_ADMIN_URL   URL de un administrador de PostgreSQL de pruebas (NO la de producción)
+#   QA_PG_CONTAINER       contenedor de PostgreSQL de QA (por defecto apunte-qa-postgres-1)
 #   (más las variables de restic de backup.sh)
 set -euo pipefail
 
-: "${RESTORE_ADMIN_URL:?falta RESTORE_ADMIN_URL}"
 : "${RESTIC_REPOSITORY:?falta RESTIC_REPOSITORY}"
 : "${RESTIC_PASSWORD_FILE:?falta RESTIC_PASSWORD_FILE}"
 umask 077
 
+C="${QA_PG_CONTAINER:-apunte-qa-postgres-1}"
 DB="apunte_restore_$(date -u +%Y%m%d%H%M%S)"
-WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK"; psql "$RESTORE_ADMIN_URL" -qc "DROP DATABASE IF EXISTS \"$DB\" WITH (FORCE)" || true; }
+psql_q() { docker exec -i "$C" psql -U postgres -v ON_ERROR_STOP=1 -q "$@"; }
+cleanup() { psql_q -c "DROP DATABASE IF EXISTS \"$DB\" WITH (FORCE)" || true; }
 trap cleanup EXIT
 
-restic dump latest apunte.dump --tag apunte > "$WORK/apunte.dump"
-psql "$RESTORE_ADMIN_URL" -qc "CREATE DATABASE \"$DB\""
-BASE="${RESTORE_ADMIN_URL%/*}"
-pg_restore --no-owner --dbname="$BASE/$DB" "$WORK/apunte.dump"
+psql_q -c "CREATE DATABASE \"$DB\""
+restic dump latest apunte.dump --tag apunte | docker exec -i "$C" pg_restore --no-owner --username=postgres --dbname="$DB"
 
-psql "$BASE/$DB" -tA <<'SQL'
+docker exec -i "$C" psql -U postgres -d "$DB" -tA <<'SQL'
 SELECT 'migraciones', max(version_id) FROM goose_db_version;
 SELECT 'cuentas', count(*) FROM users;
 SELECT 'notas', count(*) FROM notes;
