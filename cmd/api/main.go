@@ -116,11 +116,12 @@ func healthcheck() int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	//nolint:gosec // siempre 127.0.0.1; PORT lo fija quien opera el servidor
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+port+"/ready", nil)
 	if err != nil {
 		return 1
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // idem
 	if err != nil {
 		return 1
 	}
