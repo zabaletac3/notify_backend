@@ -38,6 +38,10 @@ func TestLoadFailsClosed(t *testing.T) {
 		"env inválido":     func(t *testing.T) { t.Setenv("APP_ENV", "staging") },
 		"origen comodín":   func(t *testing.T) { t.Setenv("ALLOWED_ORIGINS", "*") },
 		"origen con ruta":  func(t *testing.T) { t.Setenv("ALLOWED_ORIGINS", "https://a.com/x") },
+		"previo corto":     func(t *testing.T) { t.Setenv("JWT_SECRET_PREVIOUS", "corto") },
+		"previo igual":     func(t *testing.T) { t.Setenv("JWT_SECRET_PREVIOUS", secretA) },
+		"access largo":     func(t *testing.T) { t.Setenv("ACCESS_TTL", "3h") },
+		"refresh corto":    func(t *testing.T) { t.Setenv("REFRESH_TTL", "1m") },
 		"mail desconocido": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "smtp") },
 		"resend sin clave": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "resend") },
 	}
