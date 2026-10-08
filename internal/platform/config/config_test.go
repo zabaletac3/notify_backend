@@ -18,6 +18,33 @@ func setValid(t *testing.T) {
 	t.Setenv("PEPPER", secretB)
 }
 
+func setSMTP(t *testing.T) {
+	t.Helper()
+	t.Setenv("MAIL_PROVIDER", "smtp")
+	t.Setenv("SMTP_HOST", "smtp.gmail.com")
+	t.Setenv("SMTP_USER", "ana@gmail.com")
+	t.Setenv("SMTP_PASSWORD", "app-password")
+	t.Setenv("MAIL_FROM", "Apunte <ana@gmail.com>")
+}
+
+func TestSMTPValid(t *testing.T) {
+	setValid(t)
+	setSMTP(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mail.SMTPPort != 587 {
+		t.Fatalf("el puerto por defecto debe ser 587: %d", c.Mail.SMTPPort)
+	}
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("WEB_BASE_URL", "https://app.example.com")
+	if _, err := Load(); err != nil {
+		t.Fatalf("prod debe admitir smtp: %v", err)
+	}
+}
+
 func TestLoadValid(t *testing.T) {
 	setValid(t)
 	c, err := Load()
@@ -44,8 +71,11 @@ func TestLoadFailsClosed(t *testing.T) {
 		"refresh corto":    func(t *testing.T) { t.Setenv("REFRESH_TTL", "1m") },
 		"web sin esquema":  func(t *testing.T) { t.Setenv("WEB_BASE_URL", "app.example.com") },
 		"web con consulta": func(t *testing.T) { t.Setenv("WEB_BASE_URL", "https://app.example.com/?x=1") },
-		"mail desconocido": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "smtp") },
+		"mail desconocido": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "sendgrid") },
 		"resend sin clave": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "resend") },
+		"smtp sin datos":   func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "smtp") },
+		"smtp puerto malo": func(t *testing.T) { setSMTP(t); t.Setenv("SMTP_PORT", "70000") },
+		"smtp from malo":   func(t *testing.T) { setSMTP(t); t.Setenv("MAIL_FROM", "no es una dirección") },
 		"dominio cookie":   func(t *testing.T) { t.Setenv("COOKIE_DOMAIN", "http://x") },
 	}
 	for name, mutate := range cases {

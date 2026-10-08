@@ -58,6 +58,8 @@ func run() error {
 	// El correo se inyecta como interfaz: los módulos no saben qué proveedor hay detrás.
 	mail, err := mailer.New(mailer.Options{
 		Provider: cfg.Mail.Provider, From: cfg.Mail.From, ResendAPIKey: cfg.Mail.ResendAPIKey,
+		SMTPHost: cfg.Mail.SMTPHost, SMTPPort: cfg.Mail.SMTPPort,
+		SMTPUser: cfg.Mail.SMTPUser, SMTPPassword: cfg.Mail.SMTPPassword,
 	}, log)
 	if err != nil {
 		return err
