@@ -31,7 +31,7 @@ func NewRouter(cfg *config.Config, log *slog.Logger, db Pinger, modules ...func(
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "x-trace-id"},
 		ExposedHeaders:   []string{"x-trace-id"},
-		AllowCredentials: true,
+		AllowCredentials: false, // la API usa Authorization: Bearer; no hay cookies que enviar
 		MaxAge:           600,
 	}))
 

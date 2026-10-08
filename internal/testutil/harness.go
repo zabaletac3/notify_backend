@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,15 +54,17 @@ type Env struct {
 	Auth *auth.Service
 	DB   *testdb.DB
 	Now  time.Time
+	// Logs recoge todo lo que la API registra (para comprobar que no filtra secretos).
+	Logs *bytes.Buffer
 }
 
 // New monta la API. El reloj de las cuentas y del limitador es e.Now.
 func New(t *testing.T) *Env {
 	t.Helper()
 	db := testdb.New(t)
-	e := &Env{T: t, DB: db, Mail: &mailer.MemoryMailer{}, Now: time.Now().UTC()}
+	e := &Env{T: t, DB: db, Mail: &mailer.MemoryMailer{}, Now: time.Now().UTC(), Logs: &bytes.Buffer{}}
 	now := func() time.Time { return e.Now }
-	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	log := slog.New(slog.NewJSONHandler(&lockedWriter{w: e.Logs}, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	hasher, _ := security.NewAuthKeyHasher(Pepper)
 	signer, err := security.NewSigner(security.SignerOptions{Secret: secret, Issuer: "t", TTL: 15 * time.Minute, Now: now})
 	if err != nil {
@@ -163,4 +167,48 @@ func (e *Env) CreateNote(token string, trashed bool) string {
 		e.T.Fatalf("crear nota: %d %s", r.Code, r.Raw)
 	}
 	return id
+}
+
+// lockedWriter protege el búfer de logs de escrituras concurrentes.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// DoRaw envía un cuerpo tal cual (para probar cuerpos hostiles o tipos de contenido erróneos).
+func (e *Env) DoRaw(method, path, contentType, body, token string) Resp {
+	e.T.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), method, "/v1"+path, strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("X-Forwarded-For", "198.51.100.77")
+	rec := httptest.NewRecorder()
+	e.H.ServeHTTP(rec, req)
+	var m map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header()}
+}
+
+// DoHeader hace un GET con el valor exacto de la cabecera Authorization.
+func (e *Env) DoHeader(method, path, authorization string) Resp {
+	e.T.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), method, "/v1"+path, nil)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	rec := httptest.NewRecorder()
+	e.H.ServeHTTP(rec, req)
+	var m map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &m)
+	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header()}
 }

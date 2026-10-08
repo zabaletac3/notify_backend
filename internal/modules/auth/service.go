@@ -29,7 +29,13 @@ const (
 )
 
 // Reglas propias de este módulo (las de login y códigos están en ratelimit).
-var registerRule = ratelimit.Rule{Max: 10, Window: time.Hour, Block: time.Hour}
+var (
+	registerRule = ratelimit.Rule{Max: 10, Window: time.Hour, Block: time.Hour}
+	// Intentos de login (buenos o malos) por IP.
+	loginHitRule = ratelimit.Rule{Max: 60, Window: time.Minute, Block: 5 * time.Minute}
+	// Intentos de código por cuenta, sea cual sea la IP: un atacante repartido no puede adivinar 10^6 códigos.
+	verifyAccountRule = ratelimit.Rule{Max: 15, Window: time.Hour, Block: time.Hour}
+)
 
 // Config son los valores que necesita el servicio.
 type Config struct {
@@ -229,6 +235,9 @@ func (s *Service) VerifyEmail(ctx context.Context, ip, email, code string) (*Ses
 	if err := s.take(ctx, s.Limiter.Key("verify", email, ip), ratelimit.CodeAttempt); err != nil {
 		return nil, err
 	}
+	if err := s.take(ctx, s.Limiter.Key("verify-account", email), verifyAccountRule); err != nil {
+		return nil, err
+	}
 	invalid := apperrors.Validation(map[string]string{"code": "invalid-code"})
 	var (
 		sess    *Session
@@ -342,10 +351,15 @@ func (s *Service) ResendCode(ctx context.Context, ip, email string) error {
 // ── Login ───────────────────────────────────────────────────────
 
 func (s *Service) Login(ctx context.Context, ip string, req *LoginRequest) (*Session, error) {
+	// Tope de intentos por IP ANTES de cualquier hash: Argon2id cuesta memoria y CPU, y sin esto bastaría
+	// inundar el login para agotar el servidor.
+	if err := s.take(ctx, s.Limiter.Key("login-hit", ip), loginHitRule); err != nil {
+		return nil, err
+	}
 	email := security.NormalizeEmail(req.Email)
 	if !validEmail(email) || !security.ValidAuthKey(req.AuthKey) {
-		// Misma respuesta que unas credenciales incorrectas: no se distingue el motivo.
-		s.Hasher.VerifyDummy(req.AuthKey)
+		// Misma respuesta que unas credenciales incorrectas. Sin hash: una entrada mal formada no revela
+		// nada de ninguna cuenta y no debe poder gastar el presupuesto de CPU.
 		return nil, apperrors.InvalidCredentials()
 	}
 	acct, byIP := s.Limiter.Key("login", email, ip), s.Limiter.Key("login-ip", ip)

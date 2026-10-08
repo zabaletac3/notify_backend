@@ -436,3 +436,112 @@ func TestStorageQuotaBlocksUploads(t *testing.T) {
 		t.Fatalf("borrar con la cuota llena: %s", r)
 	}
 }
+
+// Cuentas grandes: la descarga se reparte en páginas y, siguiendo el cursor, llega TODO sin repetir ni perder.
+func TestRemoteChangesArePaginatedWithoutLoss(t *testing.T) {
+	e := newEnv(t, Limits{MaxChanges: 500, MaxNotes: 10000, MaxFolders: 500, MaxRemote: 4})
+	a := e.account("ana@example.com")
+	b := e.login("ana@example.com", "Móvil")
+	want := map[string]bool{}
+	folder := newID()
+	var changes []map[string]any
+	changes = append(changes, folderUpsert(folder, 0, sealedPl))
+	want[folder] = true
+	for i := 0; i < 11; i++ {
+		id := newID()
+		want[id] = true
+		changes = append(changes, noteUpsert(id, 0, folder, sealedPl))
+	}
+	if r := a.sync(nil, changes...); r.Code != 200 || r.Body["hasMore"] != false {
+		t.Fatalf("subida: %s", r)
+	}
+	// B baja de 4 en 4 hasta terminar.
+	got := map[string]int{}
+	var cursor any
+	pages := 0
+	for {
+		r := b.sync(cursor)
+		if r.Code != 200 {
+			t.Fatalf("página %d: %s", pages, r)
+		}
+		pages++
+		for _, c := range list(r, "remoteChanges") {
+			got[c["id"].(string)]++
+		}
+		if len(list(r, "remoteChanges")) > 4 {
+			t.Fatalf("la página supera el máximo: %d", len(list(r, "remoteChanges")))
+		}
+		cursor = r.cursor()
+		if r.Body["hasMore"] != true {
+			break
+		}
+		if pages > 10 {
+			t.Fatal("no termina")
+		}
+	}
+	if pages != 3 {
+		t.Fatalf("12 elementos en páginas de 4 son 3 páginas, fueron %d", pages)
+	}
+	for id := range want {
+		if got[id] != 1 {
+			t.Fatalf("el elemento %s llegó %d veces", id, got[id])
+		}
+	}
+	// Tras terminar no hay nada más.
+	if r := b.sync(cursor); len(list(r, "remoteChanges")) != 0 || r.Body["hasMore"] != false {
+		t.Fatalf("debía estar al día: %s", r)
+	}
+}
+
+func TestRemoteChangesPageRespectsByteBudgetAndTombstoneRevision(t *testing.T) {
+	// Cada nota de prueba ronda ~60 bytes cifrados: con un presupuesto de 100 caben 1–2 por página.
+	e := newEnv(t, Limits{MaxChanges: 500, MaxNotes: 10000, MaxFolders: 500, MaxRemote: 100, RemoteBytes: 100})
+	a := e.account("ana@example.com")
+	b := e.login("ana@example.com", "Móvil")
+	ids := []string{newID(), newID(), newID(), newID()}
+	var ch []map[string]any
+	for _, id := range ids {
+		ch = append(ch, noteUpsert(id, 0, nil, sealedPl))
+	}
+	a.sync(nil, ch...)
+	a.sync(nil, del("note", ids[0], 1)) // lápida con revisión 1
+	seen, pages := map[string]bool{}, 0
+	var cursor any
+	var tombRevision float64 = -1
+	for {
+		r := b.sync(cursor)
+		pages++
+		for _, c := range list(r, "remoteChanges") {
+			seen[c["id"].(string)] = true
+			if c["deleted"] == true {
+				tombRevision = c["revision"].(float64)
+			}
+		}
+		cursor = r.cursor()
+		if r.Body["hasMore"] != true || pages > 10 {
+			break
+		}
+	}
+	if pages < 2 {
+		t.Fatalf("el presupuesto de bytes debía partir la descarga: %d páginas", pages)
+	}
+	if !seen[ids[0]] || !seen[ids[3]] || tombRevision != 1 {
+		t.Fatalf("faltan elementos o la lápida perdió su revisión: %v rev=%v", seen, tombRevision)
+	}
+}
+
+func TestFolderDeleteGivesEachNoteItsOwnSeq(t *testing.T) {
+	e := newEnv(t, Limits{})
+	a := e.account("ana@example.com")
+	folder := newID()
+	ch := []map[string]any{folderUpsert(folder, 0, sealedPl)}
+	for i := 0; i < 3; i++ {
+		ch = append(ch, noteUpsert(newID(), 0, folder, sealedPl))
+	}
+	a.sync(nil, ch...)
+	a.sync(nil, del("folder", folder, 0))
+	var dup int
+	if err := e.db.Admin.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM notes) - (SELECT count(DISTINCT seq) FROM notes)`).Scan(&dup); err != nil || dup != 0 {
+		t.Fatalf("seq repetidos entre notas: %d %v", dup, err)
+	}
+}

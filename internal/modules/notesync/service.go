@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -19,6 +20,9 @@ type Limits struct {
 	MaxChanges int
 	MaxNotes   int
 	MaxFolders int
+	// MaxRemote y RemoteBytes acotan lo que baja cada /sync (el cliente repite mientras haya más).
+	MaxRemote   int
+	RemoteBytes int64
 	// QuotaBytes limita los textos cifrados de la cuenta (0 = sin límite).
 	QuotaBytes int64
 }
@@ -75,11 +79,15 @@ func (s *Service) Sync(ctx context.Context, p Principal, req *Request) (*Respons
 			return err
 		}
 		res.Cursor = strconv.FormatInt(top, 10)
-		remote, err := s.changesSince(ctx, tx, since, top, touched)
+		remote, cursor, more, err := s.changesSince(ctx, tx, since, top, touched)
 		if err != nil {
 			return err
 		}
 		res.RemoteChanges = remote
+		res.HasMore = more
+		if more {
+			res.Cursor = strconv.FormatInt(cursor, 10) // la página no llega hasta `top`
+		}
 		return nil
 	})
 	if err != nil {
@@ -275,12 +283,32 @@ func (s *Service) applyFolder(ctx context.Context, tx pgx.Tx, c parsed, res *Res
 				return err
 			}
 			// Sus notas pasan a "sin carpeta" también en el servidor (es un metadato; no hace falta descifrar).
-			seq, err := nextSeq(ctx, tx)
+			// Un seq por nota: el cursor de /sync necesita que sean únicos para poder paginar sin perder cambios.
+			rows, err := tx.Query(ctx, `SELECT id::text FROM notes WHERE folder_id = $1 FOR UPDATE`, c.ID)
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE notes SET folder_id = NULL, revision = revision + 1, seq = $2 WHERE folder_id = $1`, c.ID, seq); err != nil {
+			var ids []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return err
+				}
+				ids = append(ids, id)
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
 				return err
+			}
+			for _, id := range ids {
+				seq, err := nextSeq(ctx, tx)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE notes SET folder_id = NULL, revision = revision + 1, seq = $2 WHERE id = $1`, id, seq); err != nil {
+					return err
+				}
 			}
 		}
 		res.Applied = append(res.Applied, Applied{Entity: "folder", ID: c.ID, Revision: next})
@@ -311,89 +339,150 @@ func (s *Service) applyFolder(ctx context.Context, tx pgx.Tx, c parsed, res *Res
 
 // ── Lo que cambió en otros dispositivos ───────────────────────────────────
 
-func (s *Service) changesSince(ctx context.Context, tx pgx.Tx, since, top int64, touched map[string]bool) ([]RemoteChange, error) {
-	type item struct {
-		seq int64
-		rc  RemoteChange
+// changesSince devuelve una PÁGINA acotada (por número de elementos y por bytes) de lo cambiado con
+// seq en (since, top], en orden de seq. Si no cabe todo devuelve more=true y el cursor del último
+// elemento incluido; los que comparten seq con él se incluyen todos (si no, se perderían). Así una
+// cuenta grande no obliga al servidor a armar una respuesta de cientos de MB en memoria.
+func (s *Service) changesSince(ctx context.Context, tx pgx.Tx, since, top int64, touched map[string]bool) (out []RemoteChange, cursor int64, more bool, err error) {
+	maxItems, maxBytes := s.limits.MaxRemote, s.limits.RemoteBytes
+	if maxItems < 1 {
+		maxItems = 500
 	}
-	var items []item
+	if maxBytes < 1 {
+		maxBytes = 8 << 20
+	}
 
-	rows, err := tx.Query(ctx, `SELECT id::text, created_at, updated_at, revision, wrapped_key, payload, seq FROM folders WHERE seq > $1 AND seq <= $2`, since, top)
+	// 1) Solo metadatos (entidad, id, seq, tamaño): barato aunque haya muchas filas.
+	rows, err := tx.Query(ctx, `
+		SELECT entity, id, seq, sz, rev FROM (
+			SELECT 'folder' AS entity, id::text AS id, seq, (pg_column_size(payload) + pg_column_size(wrapped_key))::bigint AS sz, revision::bigint AS rev FROM folders WHERE seq > $1 AND seq <= $2
+			UNION ALL
+			SELECT 'note', id::text, seq, (pg_column_size(payload) + pg_column_size(wrapped_key))::bigint, revision::bigint FROM notes WHERE seq > $1 AND seq <= $2
+			UNION ALL
+			SELECT 'tomb-' || entity, id::text, seq, 0::bigint, revision::bigint FROM tombstones WHERE seq > $1 AND seq <= $2
+		) x ORDER BY seq, entity, id LIMIT $3`, since, top, int64(maxItems+len(touched)+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, false, err
 	}
+	type meta struct {
+		entity, id     string
+		seq, size, rev int64
+	}
+	var metas []meta
 	for rows.Next() {
-		var f EncryptedFolder
-		var seq int64
-		if err := rows.Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt, &f.Revision, &f.WrappedKey, &f.Payload, &seq); err != nil {
+		var m meta
+		if err := rows.Scan(&m.entity, &m.id, &m.seq, &m.size, &m.rev); err != nil {
 			rows.Close()
-			return nil, err
+			return nil, 0, false, err
 		}
-		if !touched["folder:"+f.ID] {
-			items = append(items, item{seq, RemoteChange{Entity: "folder", ID: f.ID, Revision: f.Revision, Folder: &f}})
-		}
+		metas = append(metas, m)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, false, err
+	}
+	scanned := len(metas) >= maxItems+len(touched)+1 // el LIMIT cortó: puede haber más
+
+	// 2) Se eligen los que caben, sin partir un grupo con el mismo seq.
+	var picked []meta
+	var bytes int64
+	included := 0
+	for _, m := range metas {
+		// Los seq son únicos por cuenta (cada escritura toma el suyo), así que cortar entre dos
+		// elementos nunca separa cambios que compartan cursor.
+		if touched[strings.TrimPrefix(m.entity, "tomb-")+":"+m.id] {
+			cursor = m.seq
+			continue
+		}
+		if included > 0 && (included >= maxItems || bytes+m.size > maxBytes) {
+			more = true
+			break
+		}
+		picked = append(picked, m)
+		included++
+		bytes += m.size
+		cursor = m.seq
+	}
+	if !more && scanned {
+		more = true // había más filas tras el LIMIT
+	}
+	if !more {
+		cursor = top
 	}
 
-	rows, err = tx.Query(ctx, noteSelect+` WHERE seq > $1 AND seq <= $2`, since, top)
-	if err != nil {
-		return nil, err
+	// 3) Se leen completas solo las elegidas.
+	var noteIDs, folderIDs []string
+	for _, m := range picked {
+		switch m.entity {
+		case "note":
+			noteIDs = append(noteIDs, m.id)
+		case "folder":
+			folderIDs = append(folderIDs, m.id)
+		}
 	}
-	for rows.Next() {
-		n, seq, err := scanNote(rows)
+	notes := map[string]*EncryptedNote{}
+	if len(noteIDs) > 0 {
+		r, err := tx.Query(ctx, noteSelect+` WHERE id = ANY($1::uuid[])`, noteIDs)
 		if err != nil {
-			rows.Close()
-			return nil, err
+			return nil, 0, false, err
 		}
-		if !touched["note:"+n.ID] {
-			items = append(items, item{seq, RemoteChange{Entity: "note", ID: n.ID, Revision: n.Revision, Note: n}})
+		for r.Next() {
+			n, _, err := scanNote(r)
+			if err != nil {
+				r.Close()
+				return nil, 0, false, err
+			}
+			notes[n.ID] = n
+		}
+		r.Close()
+		if err := r.Err(); err != nil {
+			return nil, 0, false, err
 		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	folders := map[string]*EncryptedFolder{}
+	if len(folderIDs) > 0 {
+		r, err := tx.Query(ctx, `SELECT id::text, created_at, updated_at, revision, wrapped_key, payload FROM folders WHERE id = ANY($1::uuid[])`, folderIDs)
+		if err != nil {
+			return nil, 0, false, err
+		}
+		for r.Next() {
+			var f EncryptedFolder
+			if err := r.Scan(&f.ID, &f.CreatedAt, &f.UpdatedAt, &f.Revision, &f.WrappedKey, &f.Payload); err != nil {
+				r.Close()
+				return nil, 0, false, err
+			}
+			folders[f.ID] = &f
+		}
+		r.Close()
+		if err := r.Err(); err != nil {
+			return nil, 0, false, err
+		}
 	}
 
-	rows, err = tx.Query(ctx, `SELECT entity, id::text, revision, seq FROM tombstones WHERE seq > $1 AND seq <= $2`, since, top)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var rc RemoteChange
-		var seq int64
-		if err := rows.Scan(&rc.Entity, &rc.ID, &rc.Revision, &seq); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		rc.Deleted = true
-		if !touched[rc.Entity+":"+rc.ID] {
-			items = append(items, item{seq, rc})
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Carpetas antes que notas, y cada grupo por orden de cambio.
-	rank := func(e string) int {
-		if e == "folder" {
+	// Carpetas antes que notas, y cada grupo por orden de cambio (picked ya viene por seq).
+	rank := func(entity string) int {
+		if entity == "folder" {
 			return 0
 		}
 		return 1
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if ri, rj := rank(items[i].rc.Entity), rank(items[j].rc.Entity); ri != rj {
-			return ri < rj
+	sort.SliceStable(picked, func(i, j int) bool { return rank(picked[i].entity) < rank(picked[j].entity) })
+	for _, m := range picked {
+		switch m.entity {
+		case "folder":
+			if f := folders[m.id]; f != nil {
+				out = append(out, RemoteChange{Entity: "folder", ID: f.ID, Revision: f.Revision, Folder: f})
+			}
+		case "note":
+			if n := notes[m.id]; n != nil {
+				out = append(out, RemoteChange{Entity: "note", ID: n.ID, Revision: n.Revision, Note: n})
+			}
+		default: // lápida
+			out = append(out, RemoteChange{Entity: strings.TrimPrefix(m.entity, "tomb-"), ID: m.id, Deleted: true, Revision: int(m.rev)})
 		}
-		return items[i].seq < items[j].seq
-	})
-	out := make([]RemoteChange, len(items))
-	for i, it := range items {
-		out[i] = it.rc
 	}
-	return out, nil
+	if out == nil {
+		out = []RemoteChange{}
+	}
+	return out, cursor, more, nil
 }
