@@ -37,6 +37,12 @@ type Config struct {
 	// Orígenes permitidos por CORS (lista separada por comas, sin comodines).
 	AllowedOrigins []string `env:"ALLOWED_ORIGINS" envSeparator:","`
 
+	// CookieSecure: la cookie de sesión web (modo cookie) lleva `Secure`. Por defecto `true`; solo
+	// en dev vale `false` si no se indica. En qa/prod no puede ser `false`.
+	CookieSecure *bool `env:"COOKIE_SECURE"`
+	// CookieDomain: dominio de la cookie de sesión; vacío = solo el host de la API (host-only).
+	CookieDomain string `env:"COOKIE_DOMAIN"`
+
 	// TrustProxy: la API va detrás de Caddy, que añade la IP real al final de X-Forwarded-For.
 	// Con false (dev) se usa la dirección de la conexión y se ignora la cabecera.
 	TrustProxy bool `env:"TRUST_PROXY" envDefault:"false"`
@@ -73,6 +79,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	c.Env = strings.ToLower(c.Env)
+	if c.CookieSecure == nil {
+		secure := c.Env != "dev" // dev permite http://localhost; qa/prod siempre Secure
+		c.CookieSecure = &secure
+	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -80,6 +90,9 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) IsProd() bool { return c.Env == "prod" }
+
+// SecureCookie indica si la cookie de sesión web debe llevar el atributo `Secure`.
+func (c *Config) SecureCookie() bool { return c.CookieSecure != nil && *c.CookieSecure }
 
 // Validate aplica las reglas de seguridad de la configuración.
 func (c *Config) Validate() error {
@@ -133,6 +146,14 @@ func (c *Config) Validate() error {
 			add("ALLOWED_ORIGINS contiene un origen no válido: %q", o)
 		}
 	}
+	if c.CookieDomain != "" && !validCookieDomain(c.CookieDomain) {
+		add("COOKIE_DOMAIN no es un dominio válido: %q", c.CookieDomain)
+	}
+	if c.Env == "qa" || c.Env == "prod" {
+		if !c.SecureCookie() {
+			add("COOKIE_SECURE no puede ser false en %s", c.Env)
+		}
+	}
 
 	switch c.Mail.Provider {
 	case "log":
@@ -169,4 +190,25 @@ func validWebBase(raw string, prod bool) bool {
 		return false
 	}
 	return u.Scheme == "https" || (u.Scheme == "http" && !prod)
+}
+
+// validCookieDomain acepta un dominio de cookie (con o sin punto inicial) sin esquema, puerto ni ruta.
+func validCookieDomain(raw string) bool {
+	s := strings.TrimPrefix(raw, ".")
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			ok := ch == '-' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+			if !ok || (ch == '-' && (i == 0 || i == len(label)-1)) {
+				return false
+			}
+		}
+	}
+	return true
 }

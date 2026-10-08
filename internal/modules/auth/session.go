@@ -176,6 +176,38 @@ func (s *Service) Logout(ctx context.Context, p Principal) error {
 	return s.revokeDevice(ctx, p.UserID, p.DeviceID)
 }
 
+// LogoutByRefreshToken cierra la sesión a la que pertenece un token de renovación (modo cookie en
+// `POST /auth/logout`, que debe funcionar aunque el token de acceso haya vencido). Es idempotente:
+// un token ausente, inválido, gastado o ya revocado no es un error ni revela nada.
+func (s *Service) LogoutByRefreshToken(ctx context.Context, token string) error {
+	if len(token) < 20 || len(token) > 200 {
+		return nil
+	}
+	var (
+		userID, deviceID string
+		found            bool
+	)
+	err := database.WithoutUser(ctx, s.Pool, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT user_id::text, device_id::text FROM refresh_tokens WHERE token_hash = $1`,
+			security.HashToken(token)).Scan(&userID, &deviceID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return apperrors.Internal(err)
+	}
+	if !found {
+		return nil
+	}
+	return s.revokeDevice(ctx, userID, deviceID)
+}
+
 func (s *Service) revokeDevice(ctx context.Context, userID, deviceID string) error {
 	err := database.WithUser(ctx, s.Pool, userID, func(tx pgx.Tx) error {
 		now := s.Now()

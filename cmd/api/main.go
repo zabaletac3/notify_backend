@@ -82,7 +82,9 @@ func run() error {
 		Config: auth.Config{Pepper: []byte(cfg.Pepper), AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL, WebBaseURL: cfg.WebBaseURL},
 	})
 	defer authSvc.Close() // espera a los correos en vuelo
-	authHandler := auth.NewHandler(authSvc, log, cfg.TrustProxy)
+	authHandler := auth.NewHandler(authSvc, log, cfg.TrustProxy, auth.CookieOptions{
+		Secure: cfg.SecureCookie(), Domain: cfg.CookieDomain, AllowedOrigins: cfg.AllowedOrigins,
+	})
 
 	syncSvc := notesync.NewService(pool, notesync.Limits{MaxChanges: cfg.MaxSyncChanges, MaxNotes: cfg.MaxNotes, MaxFolders: cfg.MaxFolders, QuotaBytes: cfg.QuotaBytes, MaxRemote: cfg.MaxRemote, RemoteBytes: cfg.RemoteBytes})
 	syncHandler := notesync.NewHandler(syncSvc, log, func(ctx context.Context) (string, string, bool) {

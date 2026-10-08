@@ -46,6 +46,7 @@ func TestLoadFailsClosed(t *testing.T) {
 		"web con consulta": func(t *testing.T) { t.Setenv("WEB_BASE_URL", "https://app.example.com/?x=1") },
 		"mail desconocido": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "smtp") },
 		"resend sin clave": func(t *testing.T) { t.Setenv("MAIL_PROVIDER", "resend") },
+		"dominio cookie":   func(t *testing.T) { t.Setenv("COOKIE_DOMAIN", "http://x") },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -78,5 +79,44 @@ func TestProdRules(t *testing.T) {
 	t.Setenv("WEB_BASE_URL", "https://app.example.com")
 	if _, err := Load(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCookieSecureDefaultsByEnv(t *testing.T) {
+	setValid(t)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SecureCookie() {
+		t.Fatal("en dev, sin COOKIE_SECURE, la cookie no debe ser Secure")
+	}
+
+	setValid(t)
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("MAIL_PROVIDER", "resend")
+	t.Setenv("RESEND_API_KEY", "re_test")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("WEB_BASE_URL", "https://app.example.com")
+	if c, err := Load(); err != nil || !c.SecureCookie() {
+		t.Fatalf("en prod la cookie debe ser Secure por defecto: %v %v", err, c)
+	}
+}
+
+func TestCookieSecureValidation(t *testing.T) {
+	cfg := func(env string, secure bool) *Config {
+		s := secure
+		return &Config{Env: env, CookieSecure: &s}
+	}
+	for _, env := range []string{"prod", "qa"} {
+		if err := cfg(env, false).Validate(); err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
+			t.Fatalf("%s debe rechazar COOKIE_SECURE=false: %v", env, err)
+		}
+	}
+	if err := cfg("dev", false).Validate(); err != nil && strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Fatalf("dev no debe exigir COOKIE_SECURE: %v", err)
+	}
+	if err := cfg("prod", true).Validate(); err != nil && strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Fatalf("prod con COOKIE_SECURE=true no debe fallar por cookie: %v", err)
 	}
 }

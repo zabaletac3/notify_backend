@@ -29,9 +29,9 @@ func NewRouter(cfg *config.Config, log *slog.Logger, db Pinger, modules ...func(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type", "x-trace-id"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "x-trace-id", "X-Apunte-Session"},
 		ExposedHeaders:   []string{"x-trace-id"},
-		AllowCredentials: false, // la API usa Authorization: Bearer; no hay cookies que enviar
+		AllowCredentials: true, // modo cookie: la web envía la cookie de refresco (nunca con origen comodín)
 		MaxAge:           600,
 	}))
 

@@ -33,6 +33,9 @@ var (
 	recKey  = strings.Repeat("R", 43)
 )
 
+// refreshCookieName es el nombre de la cookie del modo cookie (debe coincidir con el módulo auth).
+const refreshCookieName = "apunte_rt"
+
 type env struct {
 	t    *testing.T
 	h    http.Handler
@@ -42,7 +45,9 @@ type env struct {
 	now  time.Time
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvOpts(t, true) }
+
+func newEnvOpts(t *testing.T, secure bool) *env {
 	t.Helper()
 	db := testdb.New(t)
 	e := &env{t: t, db: db, mail: &mailer.MemoryMailer{}, now: time.Now().UTC()}
@@ -61,8 +66,8 @@ func newEnv(t *testing.T) *env {
 		Config: auth.Config{Pepper: pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour, WebBaseURL: "http://web.test"},
 		Now:    func() time.Time { return e.now }})
 	t.Cleanup(e.svc.Close)
-	h := auth.NewHandler(e.svc, log, true)
-	e.h = httpserver.NewRouter(&config.Config{MaxBodyBytes: 1 << 20, MaxSyncBodyBytes: 8 << 20}, log, pinger{}, h.Routes)
+	h := auth.NewHandler(e.svc, log, true, auth.CookieOptions{Secure: secure, AllowedOrigins: []string{"https://web.test"}})
+	e.h = httpserver.NewRouter(&config.Config{MaxBodyBytes: 1 << 20, MaxSyncBodyBytes: 8 << 20, AllowedOrigins: []string{"https://web.test"}}, log, pinger{}, h.Routes)
 	return e
 }
 
@@ -71,13 +76,27 @@ type pinger struct{}
 func (pinger) Ping(context.Context) error { return nil }
 
 type resp struct {
-	Code int
-	Body map[string]any
-	Raw  string
-	Hdr  http.Header
+	Code    int
+	Body    map[string]any
+	Raw     string
+	Hdr     http.Header
+	Cookies []*http.Cookie
 }
 
-func (e *env) call(method, path string, body any, token string, ip string) resp {
+// opt modifica la petición de prueba (cabeceras, cookies…).
+type opt func(*http.Request)
+
+func header(k, v string) opt        { return func(r *http.Request) { r.Header.Set(k, v) } }
+func withCookie(c *http.Cookie) opt { return func(r *http.Request) { r.AddCookie(c) } }
+
+// cookieMode activa el modo cookie de la sesión.
+func cookieMode() opt { return header("X-Apunte-Session", "cookie") }
+
+// origin fija el origen de la petición (CSRF).
+func origin(v string) opt { return header("Origin", v) }
+
+// call envía una petición a /v1. `opts` añade cabeceras o cookies.
+func (e *env) call(method, path string, body any, token string, ip string, opts ...opt) resp {
 	e.t.Helper()
 	var rd io.Reader
 	if body != nil {
@@ -95,11 +114,24 @@ func (e *env) call(method, path string, body any, token string, ip string) resp 
 		ip = "198.51.100.1"
 	}
 	req.Header.Set("X-Forwarded-For", ip)
+	for _, o := range opts {
+		o(req)
+	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, req)
 	var m map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
-	return resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header()}
+	return resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header(), Cookies: rec.Result().Cookies()}
+}
+
+// findCookie devuelve la cookie de la respuesta con ese nombre (o nil).
+func findCookie(r resp, name string) *http.Cookie {
+	for _, c := range r.Cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 func keys() map[string]any {
@@ -151,6 +183,12 @@ func (e *env) login(email, ak, ip string) resp {
 }
 
 func tok(m map[string]any, k string) string { s, _ := m[k].(string); return s }
+
+// loginBody arma un cuerpo de login como el de la web.
+func loginBody(email, name, platform string) map[string]any {
+	return map[string]any{"email": email, "authKey": authKey,
+		"device": map[string]any{"name": name, "platform": platform}}
+}
 
 func TestRegisterVerifyLoginFlow(t *testing.T) {
 	e := newEnv(t)
@@ -634,5 +672,203 @@ func TestVerifyAttemptsAreCappedPerAccountAcrossIPs(t *testing.T) {
 	// Y mientras dura el bloqueo ni el código bueno entra.
 	if r := e.call("POST", "/auth/verify-email", map[string]any{"email": "ana@example.com", "code": code}, "", "198.19.0.1"); r.Code != 429 {
 		t.Fatalf("el código correcto no debe saltarse el bloqueo: %d", r.Code)
+	}
+}
+
+// ── Modo cookie (X-Apunte-Session: cookie) ──────────────────────────────────
+
+func TestLoginCookieMode(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+
+	l := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode())
+	if l.Code != 200 || tok(l.Body, "accessToken") == "" {
+		t.Fatalf("login cookie: %d %s", l.Code, l.Raw)
+	}
+	if l.Body["refreshToken"] != nil {
+		t.Fatalf("el cuerpo no debe llevar refreshToken: %s", l.Raw)
+	}
+	c := findCookie(l, refreshCookieName)
+	if c == nil {
+		t.Fatal("falta la cookie de refresco")
+	}
+	if c.Value == "" || c.Path != "/v1/auth" || !c.HttpOnly || !c.Secure ||
+		c.SameSite != http.SameSiteStrictMode || c.Domain != "" || c.MaxAge <= 0 {
+		t.Fatalf("atributos de cookie incorrectos: %+v", c)
+	}
+	raw := strings.Join(l.Hdr.Values("Set-Cookie"), "\n")
+	if !strings.HasPrefix(raw, refreshCookieName+"=") || !strings.Contains(raw, "Max-Age=") || strings.Contains(raw, "Domain=") {
+		t.Fatalf("Set-Cookie inesperado: %q", raw)
+	}
+
+	// Regresión del modo cuerpo: sin cabecera, refreshToken en el cuerpo y ningún Set-Cookie.
+	b := e.call("POST", "/auth/login", loginBody("ana@example.com", "Escritorio", "linux"), "", "")
+	if b.Code != 200 || tok(b.Body, "refreshToken") == "" || findCookie(b, refreshCookieName) != nil {
+		t.Fatalf("modo cuerpo alterado: %d %s", b.Code, b.Raw)
+	}
+	if len(b.Hdr.Values("Set-Cookie")) != 0 {
+		t.Fatalf("el modo cuerpo no debe poner cookie: %v", b.Hdr.Values("Set-Cookie"))
+	}
+}
+
+func TestCookieSecureFollowsConfig(t *testing.T) {
+	e := newEnvOpts(t, false)
+	e.verified("ana@example.com")
+	l := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode())
+	c := findCookie(l, refreshCookieName)
+	if c == nil || c.Secure {
+		t.Fatalf("con COOKIE_SECURE=false la cookie no debe ser Secure: %+v", c)
+	}
+}
+
+func TestVerifyEmailCookieMode(t *testing.T) {
+	e := newEnv(t)
+	code := e.register("ana@example.com")
+	r := e.call("POST", "/auth/verify-email", map[string]any{"email": "ana@example.com", "code": code}, "", "", cookieMode())
+	if r.Code != 200 || tok(r.Body, "accessToken") == "" {
+		t.Fatalf("verify cookie: %d %s", r.Code, r.Raw)
+	}
+	if r.Body["refreshToken"] != nil {
+		t.Fatalf("el cuerpo no debe llevar refreshToken: %s", r.Raw)
+	}
+	c := findCookie(r, refreshCookieName)
+	if c == nil || c.Value == "" || c.Path != "/v1/auth" || !c.HttpOnly || !c.Secure ||
+		c.SameSite != http.SameSiteStrictMode || c.MaxAge <= 0 {
+		t.Fatalf("cookie de verify incorrecta: %+v", c)
+	}
+}
+
+func TestRefreshCookieRotationAndReuse(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	l := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode())
+	c1 := findCookie(l, refreshCookieName)
+	if c1 == nil {
+		t.Fatal("falta la cookie de refresco")
+	}
+
+	n := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c1))
+	if n.Code != 200 || tok(n.Body, "accessToken") == "" || n.Body["refreshToken"] != nil {
+		t.Fatalf("refresh cookie: %d %s", n.Code, n.Raw)
+	}
+	c2 := findCookie(n, refreshCookieName)
+	if c2 == nil || c2.Value == "" || c2.Value == c1.Value {
+		t.Fatalf("la cookie debía rotar: %+v", c2)
+	}
+
+	// Reusar la cookie gastada revoca la familia: la nueva tampoco sirve.
+	if r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c1)); r.Code != 401 || r.Body["kind"] != "session-expired" {
+		t.Fatalf("reuso: %d %s", r.Code, r.Raw)
+	}
+	if r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c2)); r.Code != 401 {
+		t.Fatalf("la cookie nueva debía quedar revocada: %d %s", r.Code, r.Raw)
+	}
+	var n2 int
+	if err := e.db.Admin.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE event = 'refresh-reuse'`).Scan(&n2); err != nil || n2 != 1 {
+		t.Fatalf("auditoría: %d %v", n2, err)
+	}
+}
+
+func TestRefreshCookieModeRequiresValidCookie(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	l := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode())
+	c := findCookie(l, refreshCookieName)
+
+	if r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode()); r.Code != 401 || r.Body["kind"] != "session-expired" {
+		t.Fatalf("sin cookie: %d %s", r.Code, r.Raw)
+	}
+	bad := &http.Cookie{Name: refreshCookieName, Value: strings.Repeat("a", 43)}
+	if r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(bad)); r.Code != 401 {
+		t.Fatalf("cookie inválida: %d %s", r.Code, r.Raw)
+	}
+	// Sin la cabecera, aunque haya cookie válida, manda el modo cuerpo: la cookie se ignora.
+	r := e.call("POST", "/auth/refresh", map[string]any{"refreshToken": strings.Repeat("b", 43)}, "", "", withCookie(c))
+	if r.Code != 401 {
+		t.Fatalf("el modo cuerpo no debe usar la cookie: %d %s", r.Code, r.Raw)
+	}
+}
+
+func TestLogoutCookieMode(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	l := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode())
+	c := findCookie(l, refreshCookieName)
+	if c == nil {
+		t.Fatal("falta la cookie de refresco")
+	}
+
+	e.now = e.now.Add(20 * time.Minute) // el token de acceso ya venció
+
+	lo := e.call("POST", "/auth/logout", nil, "", "", cookieMode(), withCookie(c))
+	if lo.Code != 204 {
+		t.Fatalf("logout en modo cookie: %d %s", lo.Code, lo.Raw)
+	}
+	clr := findCookie(lo, refreshCookieName)
+	if clr == nil || clr.Value != "" {
+		t.Fatalf("falta la cookie de borrado: %+v", clr)
+	}
+	if raw := strings.Join(lo.Hdr.Values("Set-Cookie"), "\n"); !strings.Contains(raw, "Max-Age=0") {
+		t.Fatalf("falta Max-Age=0: %q", raw)
+	}
+	// El refresh queda revocado.
+	if r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c)); r.Code != 401 {
+		t.Fatalf("el refresh debía quedar revocado: %d %s", r.Code, r.Raw)
+	}
+	// Sin cookie también 204 (idempotente).
+	if r := e.call("POST", "/auth/logout", nil, "", "", cookieMode()); r.Code != 204 {
+		t.Fatalf("logout sin cookie: %d %s", r.Code, r.Raw)
+	}
+	// Modo cuerpo sin Bearer: 401 como hasta hoy.
+	if r := e.call("POST", "/auth/logout", nil, "", ""); r.Code != 401 || r.Body["kind"] != "session-expired" {
+		t.Fatalf("logout cuerpo sin Bearer: %d %s", r.Code, r.Raw)
+	}
+	// Modo cuerpo con Bearer sigue funcionando.
+	ok := e.call("POST", "/auth/login", loginBody("ana@example.com", "Escritorio", "linux"), "", "")
+	if r := e.call("POST", "/auth/logout", nil, tok(ok.Body, "accessToken"), ""); r.Code != 204 {
+		t.Fatalf("logout cuerpo con Bearer: %d %s", r.Code, r.Raw)
+	}
+}
+
+func TestCookieModeCSRF(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	l := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode())
+	c := findCookie(l, refreshCookieName)
+
+	// Origin ajeno: 403, sin rotar ni revocar nada.
+	r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c), origin("https://evil.example"))
+	if r.Code != 403 || r.Body["kind"] != "forbidden" || r.Body["code"] != "csrf" {
+		t.Fatalf("csrf: %d %s", r.Code, r.Raw)
+	}
+	if findCookie(r, refreshCookieName) != nil {
+		t.Fatal("no debe rotar la cookie con un Origin ajeno")
+	}
+	// Sin Origin (cliente no navegador) se permite y rota.
+	ok := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c))
+	if ok.Code != 200 {
+		t.Fatalf("sin Origin: %d %s", ok.Code, ok.Raw)
+	}
+	c2 := findCookie(ok, refreshCookieName)
+	if c2 == nil || c2.Value == c.Value {
+		t.Fatalf("debía rotar: %+v", c2)
+	}
+	// Origin permitido: ok.
+	if r := e.call("POST", "/auth/refresh", nil, "", "", cookieMode(), withCookie(c2), origin("https://web.test")); r.Code != 200 {
+		t.Fatalf("Origin permitido: %d %s", r.Code, r.Raw)
+	}
+	// La comprobación también cubre login/verify y logout.
+	if r := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", cookieMode(), origin("https://evil.example")); r.Code != 403 {
+		t.Fatalf("csrf login: %d %s", r.Code, r.Raw)
+	}
+	fresh := e.call("POST", "/auth/login", loginBody("ana@example.com", "Móvil", "android"), "", "", cookieMode())
+	fc := findCookie(fresh, refreshCookieName)
+	if r := e.call("POST", "/auth/logout", nil, "", "", cookieMode(), withCookie(fc), origin("https://evil.example")); r.Code != 403 {
+		t.Fatalf("csrf logout: %d %s", r.Code, r.Raw)
+	}
+	// Un valor de cabecera distinto de `cookie` es 422.
+	bad := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", header("X-Apunte-Session", "bogus"))
+	if bad.Code != 422 || bad.Body["kind"] != "validation" {
+		t.Fatalf("cabecera inválida: %d %s", bad.Code, bad.Raw)
 	}
 }

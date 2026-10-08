@@ -75,7 +75,9 @@ func New(t *testing.T) *Env {
 	e.Auth = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: e.Mail, Log: log, Now: now,
 		Config: auth.Config{Pepper: Pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 24 * time.Hour, WebBaseURL: "http://web.test"}})
 	t.Cleanup(e.Auth.Close)
-	ah := auth.NewHandler(e.Auth, log, true)
+	ah := auth.NewHandler(e.Auth, log, true, auth.CookieOptions{
+		Secure: true, AllowedOrigins: []string{"https://web.test"},
+	})
 	principal := func(ctx context.Context) (string, string, bool) {
 		p, ok := auth.PrincipalFrom(ctx)
 		return p.UserID, p.DeviceID, ok
@@ -96,14 +98,24 @@ func (pinger) Ping(context.Context) error { return nil }
 
 // Resp es una respuesta HTTP ya leída.
 type Resp struct {
-	Code int
-	Body map[string]any
-	Raw  string
-	Hdr  http.Header
+	Code    int
+	Body    map[string]any
+	Raw     string
+	Hdr     http.Header
+	Cookies []*http.Cookie
 }
 
+// Opt modifica la petición de prueba (cabeceras, cookies…).
+type Opt func(*http.Request)
+
+// Header añade una cabecera a la petición.
+func Header(k, v string) Opt { return func(r *http.Request) { r.Header.Set(k, v) } }
+
+// Cookie añade una cookie a la petición.
+func Cookie(c *http.Cookie) Opt { return func(r *http.Request) { r.AddCookie(c) } }
+
 // Do hace una petición a /v1.
-func (e *Env) Do(method, path string, body any, token, ip string) Resp {
+func (e *Env) Do(method, path string, body any, token, ip string, opts ...Opt) Resp {
 	e.T.Helper()
 	var rd io.Reader
 	if body != nil {
@@ -121,11 +133,14 @@ func (e *Env) Do(method, path string, body any, token, ip string) Resp {
 		ip = "198.51.100.1"
 	}
 	req.Header.Set("X-Forwarded-For", ip)
+	for _, o := range opts {
+		o(req)
+	}
 	rec := httptest.NewRecorder()
 	e.H.ServeHTTP(rec, req)
 	var m map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
-	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header()}
+	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header(), Cookies: rec.Result().Cookies()}
 }
 
 // Account crea una cuenta verificada y devuelve su token de acceso.
@@ -196,7 +211,7 @@ func (e *Env) DoRaw(method, path, contentType, body, token string) Resp {
 	e.H.ServeHTTP(rec, req)
 	var m map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
-	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header()}
+	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header(), Cookies: rec.Result().Cookies()}
 }
 
 // DoHeader hace un GET con el valor exacto de la cabecera Authorization.
@@ -210,5 +225,5 @@ func (e *Env) DoHeader(method, path, authorization string) Resp {
 	e.H.ServeHTTP(rec, req)
 	var m map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &m)
-	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header()}
+	return Resp{Code: rec.Code, Body: m, Raw: rec.Body.String(), Hdr: rec.Header(), Cookies: rec.Result().Cookies()}
 }
