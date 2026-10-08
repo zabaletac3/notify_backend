@@ -95,6 +95,8 @@ type Response struct {
 	Applied       []Applied        `json:"applied"`
 	RemoteChanges []RemoteChange   `json:"remoteChanges"`
 	Conflicts     []ConflictReport `json:"conflicts"`
+	// HasMore indica que quedan cambios remotos: el cliente debe volver a sincronizar con este cursor.
+	HasMore bool `json:"hasMore"`
 }
 
 // Principal es quien sincroniza: cuenta y dispositivo del token.

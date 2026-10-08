@@ -34,10 +34,14 @@
 	}
 	log {
 		output stdout
-		format json
-		# No se registran cabeceras de autorización ni cookies.
 		format filter {
-			request delete headers
+			wrap json
+			fields {
+				# No se registran cabeceras (Authorization, Cookie…).
+				request>headers delete
+				# Los slugs de enlaces públicos son capacidades de lectura: no se registran.
+				request>uri regexp (/v1/public/notes/)[A-Za-z0-9_-]+ ${1}[redactado]
+			}
 		}
 	}
 }

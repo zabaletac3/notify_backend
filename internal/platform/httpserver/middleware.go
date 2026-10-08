@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/go-chi/chi/v5"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -70,8 +71,16 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rec, r)
+			// Se registra el patrón de la ruta (/v1/public/notes/{slug}), no la URL: así ni identificadores de
+			// notas ni slugs de enlaces públicos acaban en los registros.
+			path := r.URL.Path
+			if rc := chi.RouteContext(r.Context()); rc != nil {
+				if pat := rc.RoutePattern(); pat != "" {
+					path = pat
+				}
+			}
 			log.Info("http request",
-				"method", r.Method, "path", r.URL.Path, "status", rec.status,
+				"method", r.Method, "path", path, "status", rec.status,
 				"duration_ms", time.Since(start).Milliseconds(),
 				"traceId", TraceIDFrom(r.Context()))
 		})

@@ -139,14 +139,12 @@ func purgeTrash(ctx context.Context, pool *pgxpool.Pool, now, cutoff time.Time, 
 			if err := rows.Err(); err != nil {
 				return err
 			}
-			seqs := map[string]int64{} // un seq nuevo por cuenta y pasada
 			for _, v := range vs {
-				seq, ok := seqs[v.user]
-				if !ok {
-					if err := tx.QueryRow(ctx, `UPDATE users SET account_seq = account_seq + 1 WHERE id = $1 RETURNING account_seq`, v.user).Scan(&seq); err != nil {
-						return err
-					}
-					seqs[v.user] = seq
+				// Mismo orden de bloqueos que la API (primero la cuenta, luego la nota): evita interbloqueos.
+				// Un seq nuevo por lápida: el cursor de /sync necesita que sean únicos para paginar sin perder cambios.
+				var seq int64
+				if err := tx.QueryRow(ctx, `UPDATE users SET account_seq = account_seq + 1 WHERE id = $1 RETURNING account_seq`, v.user).Scan(&seq); err != nil {
+					return err
 				}
 				// Se vuelve a comprobar el plazo al borrar: si la persona la restauró entre tanto, no se toca.
 				tag, err := tx.Exec(ctx, `DELETE FROM notes WHERE id = $1 AND deleted_at < $2`, v.id, cutoff)

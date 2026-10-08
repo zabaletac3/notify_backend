@@ -4,6 +4,7 @@ package response
 
 import (
 	"encoding/json"
+	"github.com/go-chi/chi/v5"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -37,7 +38,7 @@ type errorBody struct {
 func Error(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) {
 	e := apperrors.As(err)
 	if e.Err != nil && log != nil {
-		log.ErrorContext(r.Context(), "request failed", "kind", string(e.Kind), "path", r.URL.Path, "err", e.Err.Error())
+		log.ErrorContext(r.Context(), "request failed", "kind", string(e.Kind), "path", routeOf(r), "err", e.Err.Error())
 	}
 	body := errorBody{Kind: e.Kind, Code: e.Code, Fields: e.Fields, Entity: e.Entity}
 	if e.Kind == apperrors.KindRateLimited {
@@ -49,4 +50,14 @@ func Error(w http.ResponseWriter, r *http.Request, log *slog.Logger, err error) 
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 	}
 	write(w, e.HTTPStatus(), body)
+}
+
+// routeOf devuelve el patrón de la ruta (sin identificadores ni slugs) para los registros.
+func routeOf(r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if pat := rc.RoutePattern(); pat != "" {
+			return pat
+		}
+	}
+	return r.URL.Path
 }

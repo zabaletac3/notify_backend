@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -592,5 +593,46 @@ func TestDatabaseNeverStoresSecrets(t *testing.T) {
 	var plain int
 	if err := e.db.Admin.QueryRow(context.Background(), `SELECT count(*) FROM refresh_tokens WHERE token_hash = $1::bytea`, []byte(tok(lg.Body, "refreshToken"))).Scan(&plain); err != nil || plain != 0 {
 		t.Fatalf("token de renovación en claro: %d %v", plain, err)
+	}
+}
+
+func TestLoginFloodIsCappedBeforeAnyHashing(t *testing.T) {
+	e := newEnv(t)
+	var last resp
+	start := time.Now()
+	for i := 0; i < 70; i++ {
+		last = e.call("POST", "/auth/login", map[string]any{"email": "x", "authKey": "malformada"}, "", "203.0.113.200")
+	}
+	if last.Code != 429 {
+		t.Fatalf("el login sin tope por IP permite inundar el servidor: %d", last.Code)
+	}
+	// 70 intentos mal formados no deben costar un hash cada uno (Argon2id ~30 ms): van en bastante menos.
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("los intentos mal formados son demasiado caros: %v", d)
+	}
+}
+
+func TestVerifyAttemptsAreCappedPerAccountAcrossIPs(t *testing.T) {
+	e := newEnv(t)
+	code := e.register("ana@example.com")
+	wrong := "000000"
+	if code == wrong {
+		wrong = "111111"
+	}
+	// Un atacante repartido en muchas IPs: cada IP casi no intenta, pero la cuenta sí tiene tope.
+	blocked := false
+	for i := 0; i < 40; i++ {
+		ip := fmt.Sprintf("198.18.%d.%d", i/200, i%200+1)
+		if r := e.call("POST", "/auth/verify-email", map[string]any{"email": "ana@example.com", "code": wrong}, "", ip); r.Code == 429 {
+			blocked = true
+			break
+		}
+	}
+	if !blocked {
+		t.Fatal("sin tope por cuenta, una botnet podría adivinar el código de 6 dígitos")
+	}
+	// Y mientras dura el bloqueo ni el código bueno entra.
+	if r := e.call("POST", "/auth/verify-email", map[string]any{"email": "ana@example.com", "code": code}, "", "198.19.0.1"); r.Code != 429 {
+		t.Fatalf("el código correcto no debe saltarse el bloqueo: %d", r.Code)
 	}
 }

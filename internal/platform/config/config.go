@@ -45,6 +45,8 @@ type Config struct {
 	// Límites de /sync: tamaño del cuerpo y cantidad de elementos por cuenta.
 	MaxSyncBodyBytes int64 `env:"MAX_SYNC_BODY_BYTES" envDefault:"8388608"`
 	MaxSyncChanges   int   `env:"MAX_SYNC_CHANGES" envDefault:"500"`
+	MaxRemote        int   `env:"MAX_SYNC_REMOTE_CHANGES" envDefault:"500"`   // elementos por página al bajar cambios
+	RemoteBytes      int64 `env:"MAX_SYNC_REMOTE_BYTES" envDefault:"8388608"` // bytes cifrados por página
 	MaxNotes         int   `env:"MAX_NOTES_PER_ACCOUNT" envDefault:"10000"`
 	QuotaBytes       int64 `env:"QUOTA_BYTES" envDefault:"1073741824"` // 1 GiB de textos cifrados por cuenta
 	MaxFolders       int   `env:"MAX_FOLDERS_PER_ACCOUNT" envDefault:"500"`
@@ -115,7 +117,7 @@ func (c *Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		add("PORT fuera de rango")
 	}
-	if c.MaxSyncBodyBytes < c.MaxBodyBytes || c.MaxSyncChanges < 1 || c.MaxNotes < 1 || c.MaxFolders < 1 || c.QuotaBytes < 1<<20 {
+	if c.MaxSyncBodyBytes < c.MaxBodyBytes || c.MaxSyncChanges < 1 || c.MaxNotes < 1 || c.MaxFolders < 1 || c.MaxRemote < 1 || c.RemoteBytes < 1<<16 || c.QuotaBytes < 1<<20 {
 		add("los límites de sincronización no son válidos")
 	}
 	if c.MaxBodyBytes < 1 {

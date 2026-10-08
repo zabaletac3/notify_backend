@@ -111,9 +111,12 @@ func TestPurgeDeletesTrashPastRetentionAndLeavesTombstones(t *testing.T) {
 			t.Errorf("la nota %s no debía borrarse", id)
 		}
 	}
-	// Con lotes de 2, 3 notas son dos pasadas: el seq sube una vez por pasada (no una por nota).
-	if seq := f.count(`SELECT account_seq FROM users WHERE id = $1`, f.alive); seq != 9 {
+	// Un seq nuevo por lápida (único por cuenta): 7 + 3 notas = 10.
+	if seq := f.count(`SELECT account_seq FROM users WHERE id = $1`, f.alive); seq != 10 {
 		t.Fatalf("seq de la cuenta: %d", seq)
+	}
+	if f.count(`SELECT count(DISTINCT seq) FROM tombstones WHERE user_id = $1`, f.alive) != 3 {
+		t.Fatal("las lápidas deben tener seq distintos")
 	}
 }
 

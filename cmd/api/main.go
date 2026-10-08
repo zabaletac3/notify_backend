@@ -81,7 +81,7 @@ func run() error {
 	defer authSvc.Close() // espera a los correos en vuelo
 	authHandler := auth.NewHandler(authSvc, log, cfg.TrustProxy)
 
-	syncSvc := notesync.NewService(pool, notesync.Limits{MaxChanges: cfg.MaxSyncChanges, MaxNotes: cfg.MaxNotes, MaxFolders: cfg.MaxFolders, QuotaBytes: cfg.QuotaBytes})
+	syncSvc := notesync.NewService(pool, notesync.Limits{MaxChanges: cfg.MaxSyncChanges, MaxNotes: cfg.MaxNotes, MaxFolders: cfg.MaxFolders, QuotaBytes: cfg.QuotaBytes, MaxRemote: cfg.MaxRemote, RemoteBytes: cfg.RemoteBytes})
 	syncHandler := notesync.NewHandler(syncSvc, log, func(ctx context.Context) (string, string, bool) {
 		p, ok := auth.PrincipalFrom(ctx)
 		return p.UserID, p.DeviceID, ok
