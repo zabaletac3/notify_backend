@@ -10,7 +10,7 @@ import (
 
 func TestSuccessEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Success(rec, httptest.NewRequest(http.MethodGet, "/x", nil), http.StatusOK, map[string]string{"a": "b"})
+	Success(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil), http.StatusOK, map[string]string{"a": "b"})
 	var got SuccessEnvelope
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestSuccessEnvelope(t *testing.T) {
 
 func TestFailHidesInternalError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Fail(rec, httptest.NewRequest(http.MethodGet, "/x", nil), errors.New("conn string postgres://u:p@h"))
+	Fail(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil), errors.New("conn string postgres://u:p@h"))
 	if rec.Code != 500 || rec.Body.String() == "" {
 		t.Fatalf("código %d", rec.Code)
 	}
