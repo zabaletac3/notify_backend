@@ -144,9 +144,31 @@ func (s *Service) RotateRecoveryKey(ctx context.Context, p Principal, req *Recov
 	return nil
 }
 
-// DeleteAccount programa la eliminación: se marca la cuenta, se cierran todas las sesiones y los datos
+// DeleteAccount programa la eliminación tras comprobar la prueba de la contraseña. Mismo error y
+// mismo límite `sensitive` que las demás operaciones que exigen la contraseña.
+func (s *Service) DeleteAccount(ctx context.Context, p Principal, req *DeleteAccountRequest) error {
+	if !security.ValidAuthKey(req.AuthKey) {
+		return apperrors.Validation(map[string]string{"password": "required"})
+	}
+	u, err := s.loadUser(ctx, p.UserID)
+	if err != nil {
+		return err
+	}
+	if err := s.proveAuthKey(ctx, u, req.AuthKey, "password"); err != nil {
+		return err
+	}
+	return s.deleteAccount(ctx, p)
+}
+
+// DeleteAccountLegacy atiende DELETE /me sin prueba de contraseña; se elimina junto con esa ruta
+// al cumplirse el Sunset (ver legacyDeleteSunset).
+func (s *Service) DeleteAccountLegacy(ctx context.Context, p Principal) error {
+	return s.deleteAccount(ctx, p)
+}
+
+// deleteAccount programa la eliminación: se marca la cuenta, se cierran todas las sesiones y los datos
 // se conservan 30 días (la purga los borra). Restablecer la contraseña dentro del plazo la recupera.
-func (s *Service) DeleteAccount(ctx context.Context, p Principal) error {
+func (s *Service) deleteAccount(ctx context.Context, p Principal) error {
 	var email string
 	err := database.WithUser(ctx, s.Pool, p.UserID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `UPDATE users SET deleted_at = $2 WHERE id = $1 RETURNING email`, p.UserID, s.Now()).Scan(&email); err != nil {

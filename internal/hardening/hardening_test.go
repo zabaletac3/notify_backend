@@ -48,6 +48,7 @@ func TestLogsNeverContainSecrets(t *testing.T) {
 	e.Do("POST", "/sync", map[string]any{"cursor": nil, "changes": []any{map[string]any{"entity": "note", "id": "x", "op": "upsert"}}}, tok, "")
 	e.Do("GET", "/notes/no-uuid", nil, tok, "")
 	e.Do("POST", "/auth/register", map[string]any{"email": "otra@example.com"}, "", "")
+	e.Do("POST", "/me/delete", map[string]any{"authKey": testutil.AuthKey}, tok, "")
 
 	logs := e.Logs.String()
 	if strings.TrimSpace(logs) == "" {

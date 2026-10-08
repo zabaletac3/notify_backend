@@ -115,3 +115,7 @@ type EmailChangeConfirm struct {
 	Email string `json:"email"`
 	Code  string `json:"code"`
 }
+
+type DeleteAccountRequest struct {
+	AuthKey string `json:"authKey"`
+}

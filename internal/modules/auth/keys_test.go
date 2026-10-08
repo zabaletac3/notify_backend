@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/zabaletac3/notify_backend/internal/platform/ratelimit"
 )
 
 var tokenRe = regexp.MustCompile(`token=([A-Za-z0-9_-]+)`)
@@ -385,7 +387,7 @@ func TestDeleteAccountAndRecoveryWithinGrace(t *testing.T) {
 	e.verified("ana@example.com")
 	l := e.login("ana@example.com", authKey, "")
 	ta := tok(l.Body, "accessToken")
-	if r := e.call("DELETE", "/me", nil, ta, ""); r.Code != 202 {
+	if r := e.call("POST", "/me/delete", map[string]string{"authKey": authKey}, ta, ""); r.Code != 202 {
 		t.Fatalf("delete: %d %s", r.Code, r.Raw)
 	}
 	if r := e.call("GET", "/auth/session", nil, ta, ""); r.Code != 401 {
@@ -412,6 +414,136 @@ func TestDeleteAccountAndRecoveryWithinGrace(t *testing.T) {
 	}
 	if r := e.login("ana@example.com", newAuthKey, ""); r.Code != 200 {
 		t.Fatalf("la cuenta debía recuperarse: %d %s", r.Code, r.Raw)
+	}
+}
+
+// verifiedWith registra y verifica una cuenta con una authKey propia (los helpers usan la global).
+func (e *env) verifiedWith(email, ak string) {
+	e.t.Helper()
+	b := regBody(email)
+	b["authKey"] = ak
+	if r := e.call("POST", "/auth/register", b, "", ""); r.Code != 201 {
+		e.t.Fatalf("registro: %d %s", r.Code, r.Raw)
+	}
+	e.svc.Close()
+	sent := e.mail.Sent()
+	code := codeRe.FindStringSubmatch(sent[len(sent)-1].Text)[1]
+	if r := e.call("POST", "/auth/verify-email", map[string]any{"email": email, "code": code}, "", ""); r.Code != 200 {
+		e.t.Fatalf("verificación: %d %s", r.Code, r.Raw)
+	}
+}
+
+func TestDeleteAccountRequiresPassword(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	betoKey := "B" + strings.Repeat("B", 42)
+	e.verifiedWith("beto@example.com", betoKey)
+	l := e.login("ana@example.com", authKey, "")
+	ta := tok(l.Body, "accessToken")
+
+	// Casos que no deben eliminar la cuenta.
+	cases := []struct {
+		name      string
+		body      any
+		token     string
+		wantCode  int
+		wantField string
+		wantValue string
+	}{
+		{"contraseña incorrecta", map[string]string{"authKey": strings.Repeat("W", 43)}, ta, 422, "password", "wrong-password"},
+		{"authKey de otra cuenta", map[string]string{"authKey": betoKey}, ta, 422, "password", "wrong-password"},
+		{"cuerpo vacío", map[string]any{}, ta, 422, "password", "required"},
+		{"authKey vacía", map[string]string{"authKey": ""}, ta, 422, "password", "required"},
+		{"authKey corta", map[string]string{"authKey": "x"}, ta, 422, "password", "required"},
+		{"campo desconocido", map[string]any{"authKey": authKey, "extra": true}, ta, 422, "", ""},
+		{"sin token", map[string]string{"authKey": authKey}, "", 401, "", ""},
+	}
+	for _, tc := range cases {
+		r := e.call("POST", "/me/delete", tc.body, tc.token, "")
+		if r.Code != tc.wantCode {
+			t.Errorf("%s: %d %s", tc.name, r.Code, r.Raw)
+			continue
+		}
+		if tc.wantField != "" {
+			fields, _ := r.Body["fields"].(map[string]any)
+			if fields[tc.wantField] != tc.wantValue {
+				t.Errorf("%s: fields=%v", tc.name, r.Body["fields"])
+			}
+		}
+	}
+
+	// Ni Ana ni Beto se tocaron.
+	if s := e.call("GET", "/auth/session", nil, ta, ""); s.Code != 200 {
+		t.Fatalf("la cuenta de Ana no debía eliminarse: %d %s", s.Code, s.Raw)
+	}
+	if lg := e.login("ana@example.com", authKey, "10.4.4.4"); lg.Code != 200 {
+		t.Fatalf("Ana debía poder iniciar sesión: %d %s", lg.Code, lg.Raw)
+	}
+	if lg := e.login("beto@example.com", betoKey, ""); lg.Code != 200 {
+		t.Fatalf("Beto debía seguir intacto: %d %s", lg.Code, lg.Raw)
+	}
+
+	// Caso correcto: 202, se revocan la sesión y el refresh, y se avisa por correo una sola vez.
+	if r := e.call("POST", "/me/delete", map[string]string{"authKey": authKey}, ta, ""); r.Code != 202 {
+		t.Fatalf("delete correcto: %d %s", r.Code, r.Raw)
+	}
+	if s := e.call("GET", "/auth/session", nil, ta, ""); s.Code != 401 {
+		t.Fatalf("la sesión debía cerrarse: %d", s.Code)
+	}
+	if r := e.call("POST", "/auth/refresh", map[string]string{"refreshToken": tok(l.Body, "refreshToken")}, "", ""); r.Code != 401 {
+		t.Fatalf("el refresh debía revocarse: %d", r.Code)
+	}
+	if lg := e.login("ana@example.com", authKey, "10.4.4.5"); lg.Code != 401 {
+		t.Fatalf("no se debe poder entrar en una cuenta eliminada: %d", lg.Code)
+	}
+	if e.mailsTo("ana@example.com", "se eliminará") != 1 {
+		t.Fatal("falta el aviso de eliminación")
+	}
+}
+
+func TestDeleteAccountWrongPasswordIsRateLimited(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	ta := tok(e.login("ana@example.com", authKey, "").Body, "accessToken")
+	bad := strings.Repeat("W", 43)
+	// Se reparten los fallos entre /me/password y /me/delete: comparten el contador `sensitive:<userID>`.
+	for i := 0; i < ratelimit.LoginByAccount.Max; i++ {
+		var r resp
+		if i%2 == 0 {
+			r = e.call("POST", "/me/password", map[string]any{"currentAuthKey": bad, "newAuthKey": newAuthKey, "keys": newKeys(sealedNew, sealedA, "BBBBBBBBBBBBBBBBBBBBBB")}, ta, "")
+		} else {
+			r = e.call("POST", "/me/delete", map[string]string{"authKey": bad}, ta, "")
+		}
+		if r.Code != 422 {
+			t.Fatalf("fallo %d: %d %s", i+1, r.Code, r.Raw)
+		}
+	}
+	// Superado el máximo, ni la contraseña correcta entra.
+	if r := e.call("POST", "/me/delete", map[string]string{"authKey": authKey}, ta, ""); r.Code != 429 {
+		t.Fatalf("debía bloquear aun con la contraseña correcta: %d %s", r.Code, r.Raw)
+	}
+	// Y el contador es el mismo que usa /me/password.
+	if r := e.call("POST", "/me/password", map[string]any{"currentAuthKey": authKey, "newAuthKey": newAuthKey, "keys": newKeys(sealedNew, sealedA, "BBBBBBBBBBBBBBBBBBBBBB")}, ta, ""); r.Code != 429 {
+		t.Fatalf("el contador debía ser compartido: %d %s", r.Code, r.Raw)
+	}
+}
+
+func TestLegacyDeleteAccountIsDeprecated(t *testing.T) {
+	e := newEnv(t)
+	e.verified("ana@example.com")
+	ta := tok(e.login("ana@example.com", authKey, "").Body, "accessToken")
+	r := e.call("DELETE", "/me", nil, ta, "")
+	if r.Code != 202 {
+		t.Fatalf("delete legacy: %d %s", r.Code, r.Raw)
+	}
+	if r.Hdr.Get("Deprecation") != "true" {
+		t.Errorf("falta Deprecation: %q", r.Hdr.Get("Deprecation"))
+	}
+	if r.Hdr.Get("Sunset") != "Mon, 30 Nov 2026 00:00:00 GMT" {
+		t.Errorf("Sunset: %q", r.Hdr.Get("Sunset"))
+	}
+	if link := r.Hdr.Get("Link"); !strings.Contains(link, "</v1/me/delete>") || !strings.Contains(link, "successor-version") {
+		t.Errorf("Link: %q", link)
 	}
 }
 
