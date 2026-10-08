@@ -61,13 +61,17 @@ func TestMemoryMailerConcurrent(t *testing.T) {
 }
 
 func TestLogMailerValidates(t *testing.T) {
-	var buf bytes.Buffer
-	l := LogMailer{Log: slog.New(slog.NewJSONHandler(&buf, nil))}
+	var buf, plain bytes.Buffer
+	l := LogMailer{Log: slog.New(slog.NewJSONHandler(&buf, nil)), Out: &plain}
 	if err := l.Send(context.Background(), Message{To: "x"}); !errors.Is(err, ErrInvalidMessage) {
 		t.Fatal("debía rechazar")
 	}
 	if err := l.Send(context.Background(), good); err != nil || !strings.Contains(buf.String(), "123456") {
 		t.Fatalf("no registró el correo: %v", err)
+	}
+	// Y en texto legible, con destinatario y código, para leerlo en la terminal.
+	if !strings.Contains(plain.String(), "123456") || !strings.Contains(plain.String(), good.To) {
+		t.Fatalf("falta el correo legible: %q", plain.String())
 	}
 }
 
