@@ -25,7 +25,7 @@ func newTestRouter(db Pinger) (http.Handler, *bytes.Buffer) {
 }
 
 func do(h http.Handler, method, path string, body string, hdr map[string]string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
@@ -89,7 +89,7 @@ func TestRecoverHidesPanic(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
 	h := Recover(log)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("secreto interno") }))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", "/", nil))
 	body, _ := io.ReadAll(rec.Body)
 	if rec.Code != 500 || strings.Contains(string(body), "secreto") {
 		t.Fatalf("pánico expuesto: %d %s", rec.Code, body)
