@@ -84,6 +84,35 @@ func TestCORSClosedList(t *testing.T) {
 	}
 }
 
+func TestCORSAllowsCredentialsAndSessionHeader(t *testing.T) {
+	h, _ := newTestRouter(fakeDB{})
+	pre := map[string]string{
+		"Origin":                         "https://app.example.com",
+		"Access-Control-Request-Method":  "POST",
+		"Access-Control-Request-Headers": "X-Apunte-Session",
+	}
+	ok := do(h, "OPTIONS", "/health", "", pre)
+	if got := ok.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
+		t.Fatalf("ACAO = %q", got)
+	}
+	if ok.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("con cookies debe permitir credenciales: %v", ok.Header())
+	}
+	if !strings.Contains(ok.Header().Get("Access-Control-Allow-Headers"), "X-Apunte-Session") {
+		t.Fatalf("no permite X-Apunte-Session: %q", ok.Header().Get("Access-Control-Allow-Headers"))
+	}
+	// Con credenciales nunca se responde un origen comodín.
+	if ok.Header().Get("Access-Control-Allow-Origin") == "*" {
+		t.Fatal("con credenciales no se admite el comodín de origen")
+	}
+
+	pre["Origin"] = "https://evil.com"
+	bad := do(h, "OPTIONS", "/health", "", pre)
+	if bad.Header().Get("Access-Control-Allow-Origin") != "" || bad.Header().Get("Access-Control-Allow-Credentials") != "" {
+		t.Fatalf("un origen ajeno no debe recibir CORS: %v", bad.Header())
+	}
+}
+
 func TestRecoverHidesPanic(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))

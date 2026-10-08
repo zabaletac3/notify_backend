@@ -32,6 +32,7 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Cuerpos JSON estrictos (`decode`: tipo, sin campos desconocidos, sin datos de más).
 - Anti-enumeración: `register`, `resend-code`, `forgot` y `prelogin` responden igual exista o no la cuenta; el correo se envía en segundo plano (`Service.send`) para no filtrar por tiempo.
 - Sesión: acceso JWT corto + renovación opaca con rotación; reusar un token gastado revoca la familia y el dispositivo. El dispositivo del token (`did`) se comprueba en cada petición (`device-revoked`).
+- Modo cookie (web, `X-Apunte-Session: cookie` en `login`/`verify-email`/`refresh`/`logout`): el refresh token viaja solo en la cookie `apunte_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/auth`, `Domain` solo si `COOKIE_DOMAIN`; `accessToken` sigue en el cuerpo); sin la cabecera todo es como antes (refreshToken en el cuerpo). Otra cabecera → 422. CSRF: en modo cookie un `Origin` presente debe estar en `ALLOWED_ORIGINS` (`403 forbidden/csrf`); CORS con credenciales y sin comodín. `/auth/logout` está **fuera** del grupo protegido: en modo cookie revoca por el Bearer si vale o por la cookie, y siempre responde 204 borrando la cookie; en modo cuerpo exige Bearer. `COOKIE_SECURE` por defecto true (false solo en dev; inválido en qa/prod).
 - La API no puede borrar usuarios; solo `discard_unverified_user()` (migración 00004) elimina registros sin verificar.
 
 ## Claves y recuperación

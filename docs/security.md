@@ -11,7 +11,8 @@ Este documento mapea los controles del backend con la evidencia que los respalda
 | Fuerza bruta de contraseña | Argon2id en el cliente; 5 fallos por correo+IP y 20/h por IP con bloqueo progresivo; 60 intentos/min por IP **antes de hashear** | `TestLoginBruteForceIsBlocked`, `TestLoginFloodIsCappedBeforeAnyHashing` |
 | Adivinar códigos de 6 dígitos | 5 intentos por código, 15/h por cuenta (cualquier IP) | `TestVerifyAttemptsAreCappedPerAccountAcrossIPs` |
 | Enumerar cuentas | Registro, reenvío, olvido, prelogin y cambio de correo responden igual; correo asíncrono; hash ficticio | `TestRegisterDoesNotRevealExistingAccounts`, `TestForgotPasswordHidesAccountsAndThrottles`, `TestDummyVerifyCostsLikeRealVerify` |
-| Robo de token de renovación | Rotación + detección de reutilización (revoca la familia) | `TestRefreshRotationAndReuseDetection` |
+| Robo de token de renovación | Rotación + detección de reutilización (revoca la familia) | `TestRefreshRotationAndReuseDetection`, `TestRefreshCookieRotationAndReuse` |
+| CSRF en la sesión web | Modo cookie (`X-Apunte-Session: cookie`): la cabecera obliga al preflight CORS; un `Origin` presente debe estar en `ALLOWED_ORIGINS` (`403 forbidden/csrf`); CORS con credenciales y sin comodín; la cookie es `HttpOnly; Secure; SameSite=Strict` | `TestCookieModeCSRF`, `TestCORSAllowsCredentialsAndSessionHeader` |
 | Token manipulado | Solo HS256, emisor/audiencia/caducidad obligatorias, `kid`, rotación de secreto | `TestJWTRejectsTampering`, `FuzzJWTParse` |
 | Inyección SQL / de cabeceras | Solo consultas parametrizadas; validación estricta; NUL rechazado | `TestHostileStringsNeverCauseServerErrors` |
 | Secretos en registros | Registro por patrón de ruta, sin cuerpos, cabeceras ni correos completos | `TestLogsNeverContainSecrets` |
@@ -20,6 +21,15 @@ Este documento mapea los controles del backend con la evidencia que los respalda
 | Enlace público | Slug aleatorio, 404 uniforme, límite por IP, RLS de solo `SELECT` de ese slug, slug redactado en los registros de Caddy | `TestPublicEndpointOnlyExposesTheCopy`, `TestPublicReadIsRateLimitedPerIP` |
 | Escalada desde la API | Rol sin DDL, sin `BYPASSRLS`, sin `DELETE` en `users`; secretos de migración/superusuario fuera del contenedor de la API | `TestAppRoleIsNotPrivileged`, `docs/deploy.md` |
 | Cadena de suministro | `govulncheck` y `gosec` en CI, Dependabot, imagen sin shell ni root | CI (`ci.yml`) |
+
+## Cookies y CSRF (decisión D15)
+
+La web activa el modo cookie con la cabecera `X-Apunte-Session: cookie` en `login`, `verify-email`, `refresh` y `logout`. Entonces el token de renovación viaja **solo** como cookie `apunte_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/auth`, sin `Domain` salvo `COOKIE_DOMAIN`) y no aparece en el JSON; el token de acceso sigue en el cuerpo. Sin la cabecera nada cambia (escritorio, móvil y bundles antiguos).
+
+- **Anti-CSRF**: la cabecera personalizada fuerza el preflight CORS y un `Origin` presente debe coincidir exactamente con un origen de `ALLOWED_ORIGINS` (si no, `403 forbidden/csrf`). Las peticiones sin `Origin` (clientes no navegador) se permiten. CORS usa credenciales con orígenes explícitos, nunca comodín.
+- **Logout**: en modo cookie funciona aunque el token de acceso haya vencido (revoca por la cookie) y **siempre** responde `204` borrando la cookie (`Max-Age=0`); es idempotente y no revela si la cookie valía.
+- **`COOKIE_SECURE`**: por defecto `true`; `false` solo en dev, y en qa/prod la configuración falla al arrancar si es `false`.
+- **Despliegue**: `SameSite=Strict` exige que la web y la API compartan **dominio registrable** (p. ej. `apunte.app` y `api.apunte.app`). Una web en `*.pages.dev` con la API en otro dominio no recibiría la cookie.
 
 ## Fuzzing
 
