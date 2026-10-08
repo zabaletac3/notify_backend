@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/zabaletac3/notify_backend/internal/modules/account"
 	"github.com/zabaletac3/notify_backend/internal/modules/auth"
 	"github.com/zabaletac3/notify_backend/internal/modules/notesync"
 	"github.com/zabaletac3/notify_backend/internal/modules/share"
@@ -77,8 +78,9 @@ func New(t *testing.T) *Env {
 	}
 	sh := notesync.NewHandler(notesync.NewService(db.App, notesync.Limits{MaxChanges: 500, MaxNotes: 10000, MaxFolders: 500}), log, principal)
 	shr := share.NewHandler(share.NewService(db.App, limiter), log, func(ctx context.Context) (string, bool) { u, _, ok := principal(ctx); return u, ok }, true)
+	acc := account.NewHandler(account.NewService(db.App, 1<<30), log, func(ctx context.Context) (string, bool) { u, _, ok := principal(ctx); return u, ok })
 	protected := func(r chi.Router) {
-		r.Group(func(r chi.Router) { r.Use(ah.Require); sh.Routes(r); shr.PrivateRoutes(r) })
+		r.Group(func(r chi.Router) { r.Use(ah.Require); sh.Routes(r); shr.PrivateRoutes(r); acc.Routes(r) })
 	}
 	e.H = httpserver.NewRouter(&config.Config{MaxBodyBytes: 1 << 20, MaxSyncBodyBytes: 8 << 20}, log, pinger{}, ah.Routes, protected, shr.PublicRoutes)
 	return e

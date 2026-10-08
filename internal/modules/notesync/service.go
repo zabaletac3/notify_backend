@@ -19,6 +19,8 @@ type Limits struct {
 	MaxChanges int
 	MaxNotes   int
 	MaxFolders int
+	// QuotaBytes limita los textos cifrados de la cuenta (0 = sin límite).
+	QuotaBytes int64
 }
 
 // Service aplica los cambios del cliente y entrega los remotos.
@@ -108,6 +110,31 @@ func (s *Service) checkQuota(ctx context.Context, tx pgx.Tx, changes []parsed) e
 				newNotes++
 			} else {
 				newFolders++
+			}
+		}
+	}
+	if s.limits.QuotaBytes > 0 {
+		var incoming int64
+		for _, c := range changes {
+			if c.Op != "upsert" {
+				continue
+			}
+			if c.note != nil {
+				incoming += int64(len(c.note.Payload) + len(c.note.WrappedKey))
+			} else if c.folder != nil {
+				incoming += int64(len(c.folder.Payload) + len(c.folder.WrappedKey))
+			}
+		}
+		if incoming > 0 {
+			// Cálculo prudente: no descuenta lo que reemplaza, así que cerca del límite puede rechazar de más.
+			var used int64
+			if err := tx.QueryRow(ctx, `SELECT
+				(SELECT coalesce(sum(pg_column_size(payload) + pg_column_size(wrapped_key)), 0) FROM notes) +
+				(SELECT coalesce(sum(pg_column_size(payload) + pg_column_size(wrapped_key)), 0) FROM folders)`).Scan(&used); err != nil {
+				return err
+			}
+			if used+incoming > s.limits.QuotaBytes {
+				return apperrors.Forbidden("quota-exceeded")
 			}
 		}
 	}

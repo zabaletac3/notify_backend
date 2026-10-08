@@ -72,6 +72,10 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Put("/keys/recovery", h.rotateRecovery)
 		r.Post("/me/password", h.changePassword)
 		r.Delete("/me", h.deleteMe)
+		r.Get("/me", h.me)
+		r.Patch("/me", h.updateMe)
+		r.Post("/me/email-change", h.requestEmailChange)
+		r.Post("/me/email-change/confirm", h.confirmEmailChange)
 	})
 }
 
@@ -300,4 +304,59 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	u, err := h.svc.Me(r.Context(), p)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, u)
+}
+
+func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b ProfileUpdate
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	u, err := h.svc.UpdateProfile(r.Context(), p, &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, u)
+}
+
+func (h *Handler) requestEmailChange(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b EmailChangeRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	email, err := h.svc.RequestEmailChange(r.Context(), p, &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusAccepted, emailBody{Email: email})
+}
+
+func (h *Handler) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b EmailChangeConfirm
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	u, err := h.svc.ConfirmEmailChange(r.Context(), p, &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, u)
 }

@@ -51,3 +51,8 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Lectura pública (`GET /v1/public/notes/{slug}`) por `database.WithPublicSlug` (RLS: solo `SELECT` de ese slug): solo devuelve `{payload, updatedAt}`; enlace inexistente, revocado o con forma inválida dan el mismo 404; límite por IP; `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`.
 - Mover una nota a la papelera (`deletedAt`) o borrarla por `/sync` elimina su enlace; la clave foránea con `ON DELETE CASCADE` cubre el borrado de la nota.
 - `internal/testutil` monta la API completa para las pruebas de integración de los módulos.
+
+## Perfil, ajustes y uso
+- `/me` (GET/PATCH) y el cambio de correo viven en `auth`: `POST /me/email-change` exige la prueba de la contraseña, envía el código **al correo nuevo** (y si ya tiene cuenta responde igual y avisa a su dueño); `confirm` aplica el cambio y avisa al correo anterior. El código está ligado a la cuenta y al correo nuevo.
+- `account`: `/settings` (valores por defecto como la web; PATCH estricto; `twoFactor: true` se rechaza hasta que exista la verificación en dos pasos) y `/storage/usage` (suma `pg_column_size` de lo cifrado; `QUOTA_BYTES`).
+- La cuota se aplica en `/sync` (`403 forbidden/quota-exceeded`); borrar siempre se permite.
