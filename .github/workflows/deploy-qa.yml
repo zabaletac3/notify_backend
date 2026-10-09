@@ -1,8 +1,8 @@
 name: deploy-qa
-# Cada push a `develop`: pruebas → imagen en GHCR (etiqueta sha-<commit>) → despliegue automático en QA.
+# Cada push a `main`: pruebas → imagen en GHCR (etiqueta sha-<commit>) → despliegue automático en QA.
 on:
   push:
-    branches: [develop]
+    branches: [main]
 permissions:
   contents: read
   packages: write
