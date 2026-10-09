@@ -56,6 +56,21 @@ feature/x ──PR──► develop ──push──► CI → imagen sha-<commi
 - La imagen de producción es la de QA si el commit etiquetado ya tiene imagen; con *squash merge* el commit de `main` es nuevo y se construye una vez (mismo `Dockerfile`, mismas pruebas).
 - **QA nunca recibe datos reales**: se llena con cuentas de prueba creadas desde el cliente (los datos van cifrados; el servidor no puede fabricar notas). Para empezar de cero: `deploy/reset-qa.sh --yes`.
 
+## Acceso con Google (opcional)
+
+En Google Cloud Console: crea un proyecto, la pantalla de consentimiento (ámbitos `openid email profile`, no sensibles) y un cliente OAuth de tipo «Aplicación web» con la URI de redirección `https://api.tudominio.com/v1/auth/google/callback` (y `http://localhost:8080/v1/auth/google/callback` para desarrollo).
+
+En `/etc/apunte/<amb>.api.env`:
+
+```
+GOOGLE_PROVIDER=google          # off (por defecto) | google | fake (solo APP_ENV=dev)
+GOOGLE_CLIENT_ID=…apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=…
+GOOGLE_REDIRECT_URL=https://api.tudominio.com/v1/auth/google/callback
+```
+
+Sin configurar (`off`), las rutas existen pero responden `403 forbidden/google-disabled`. Con `google`, la API **no arranca** si falta cualquiera de las tres o si la redirección no es https fuera de dev. `fake` solo se admite con `APP_ENV=dev` (pruebas y `pnpm e2e:http`).
+
 ## Mudar de servidor (menos de una hora)
 
 `setup-server.sh` → copiar `/etc/apunte` → Caddy → `init-db.sh` → restaurar la copia (`docs/operations.md`) → `release.sh` → cambiar la IP en Cloudflare.
