@@ -112,6 +112,79 @@ func TestProdRules(t *testing.T) {
 	}
 }
 
+func TestGoogleConfig(t *testing.T) {
+	// off por defecto: arranca sin más.
+	setValid(t)
+	c, err := Load()
+	if err != nil || c.Google.Provider != "off" {
+		t.Fatalf("google off por defecto: %v %+v", err, c)
+	}
+
+	// google exige las tres variables.
+	setValid(t)
+	t.Setenv("GOOGLE_PROVIDER", "google")
+	if _, err := Load(); err == nil {
+		t.Fatal("google sin credenciales debía fallar")
+	}
+
+	// google con las tres y redirect http en dev: válido.
+	setValid(t)
+	setGoogle(t, "http://localhost:8080/v1/auth/google/callback")
+	if _, err := Load(); err != nil {
+		t.Fatalf("google válido en dev: %v", err)
+	}
+
+	// fake solo vale en dev.
+	setValid(t)
+	t.Setenv("GOOGLE_PROVIDER", "fake")
+	if _, err := Load(); err != nil {
+		t.Fatalf("fake en dev: %v", err)
+	}
+
+	// proveedor desconocido.
+	setValid(t)
+	t.Setenv("GOOGLE_PROVIDER", "apple")
+	if _, err := Load(); err == nil {
+		t.Fatal("proveedor desconocido debía fallar")
+	}
+
+	// google con redirect http fuera de dev: falla.
+	setValid(t)
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("MAIL_PROVIDER", "resend")
+	t.Setenv("RESEND_API_KEY", "re_test")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("WEB_BASE_URL", "https://app.example.com")
+	setGoogle(t, "http://api.example.com/v1/auth/google/callback")
+	if _, err := Load(); err == nil {
+		t.Fatal("google con redirect http en prod debía fallar")
+	}
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://api.example.com/v1/auth/google/callback")
+	if _, err := Load(); err != nil {
+		t.Fatalf("google con redirect https en prod: %v", err)
+	}
+
+	// fake fuera de dev: falla cerrado.
+	setValid(t)
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("MAIL_PROVIDER", "resend")
+	t.Setenv("RESEND_API_KEY", "re_test")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	t.Setenv("WEB_BASE_URL", "https://app.example.com")
+	t.Setenv("GOOGLE_PROVIDER", "fake")
+	if _, err := Load(); err == nil {
+		t.Fatal("fake en prod debía fallar")
+	}
+}
+
+func setGoogle(t *testing.T, redirect string) {
+	t.Helper()
+	t.Setenv("GOOGLE_PROVIDER", "google")
+	t.Setenv("GOOGLE_CLIENT_ID", "client-id.apps.googleusercontent.com")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "client-secret")
+	t.Setenv("GOOGLE_REDIRECT_URL", redirect)
+}
+
 func TestCookieSecureDefaultsByEnv(t *testing.T) {
 	setValid(t)
 	c, err := Load()

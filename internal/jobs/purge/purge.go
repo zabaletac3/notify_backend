@@ -15,30 +15,33 @@ import (
 
 // Config son los plazos de conservación.
 type Config struct {
-	TrashRetention    time.Duration // notas en la papelera
-	AccountGrace      time.Duration // cuentas eliminadas
-	TombstoneRetain   time.Duration // lápidas
-	RevokedDeviceKeep time.Duration // dispositivos cerrados (se conservan un tiempo para reconocer `device-revoked`)
-	AuditRetention    time.Duration
-	BatchSize         int
-	Now               func() time.Time
+	TrashRetention     time.Duration // notas en la papelera
+	AccountGrace       time.Duration // cuentas eliminadas
+	TombstoneRetain    time.Duration // lápidas
+	RevokedDeviceKeep  time.Duration // dispositivos cerrados (se conservan un tiempo para reconocer `device-revoked`)
+	TrustedDeviceIdle  time.Duration // dispositivos de confianza sin usarse
+	RevokedTrustedKeep time.Duration // dispositivos de confianza revocados
+	AuditRetention     time.Duration
+	BatchSize          int
+	Now                func() time.Time
 }
 
-// Defaults devuelve los plazos del plan 0006 (§4, D7).
+// Defaults devuelve los plazos del plan 0006 (§4, D7) y 6.2 (S6).
 func Defaults() Config {
 	day := 24 * time.Hour
 	return Config{TrashRetention: 30 * day, AccountGrace: 30 * day, TombstoneRetain: 90 * day,
-		RevokedDeviceKeep: 30 * day, AuditRetention: 365 * day, BatchSize: 1000, Now: time.Now}
+		RevokedDeviceKeep: 30 * day, TrustedDeviceIdle: 180 * day, RevokedTrustedKeep: 30 * day,
+		AuditRetention: 365 * day, BatchSize: 1000, Now: time.Now}
 }
 
 // Report cuenta lo borrado.
 type Report struct {
-	Notes, Accounts, Tombstones, Devices, RefreshTokens, Codes, RateLimits, Audit int64
+	Notes, Accounts, Tombstones, Devices, RefreshTokens, Codes, RateLimits, Audit, Tickets, TrustedDevices int64
 }
 
 func (r Report) String() string {
-	return fmt.Sprintf("notas=%d cuentas=%d lapidas=%d dispositivos=%d renovaciones=%d codigos=%d limites=%d auditoria=%d",
-		r.Notes, r.Accounts, r.Tombstones, r.Devices, r.RefreshTokens, r.Codes, r.RateLimits, r.Audit)
+	return fmt.Sprintf("notas=%d cuentas=%d lapidas=%d dispositivos=%d renovaciones=%d codigos=%d limites=%d auditoria=%d tickets=%d dispositivos_confianza=%d",
+		r.Notes, r.Accounts, r.Tombstones, r.Devices, r.RefreshTokens, r.Codes, r.RateLimits, r.Audit, r.Tickets, r.TrustedDevices)
 }
 
 // Run ejecuta todas las purgas. Si una falla, devuelve el error con lo hecho hasta ese momento.
@@ -78,6 +81,17 @@ func Run(ctx context.Context, pool *pgxpool.Pool, cfg Config, log *slog.Logger) 
 		{"auditoría", func() (int64, error) {
 			return execCount(ctx, pool, `DELETE FROM audit_log WHERE at < $1`, now.Add(-cfg.AuditRetention))
 		}, &rep.Audit},
+		{"tickets", func() (int64, error) {
+			// Los tickets de autenticación duran minutos; se conservan 24 h tras caducar por si hiciera
+			// falta investigar (sin datos sensibles en claro).
+			return execCount(ctx, pool, `DELETE FROM auth_tickets WHERE expires_at < $1`, now.Add(-24*time.Hour))
+		}, &rep.Tickets},
+		{"dispositivos de confianza", func() (int64, error) {
+			// S6: revocados hace más de 30 días, o sin usarse en 180.
+			return execCount(ctx, pool, `DELETE FROM trusted_devices
+				WHERE (revoked_at IS NOT NULL AND revoked_at < $1) OR last_used_at < $2`,
+				now.Add(-cfg.RevokedTrustedKeep), now.Add(-cfg.TrustedDeviceIdle))
+		}, &rep.TrustedDevices},
 	}
 	for _, st := range steps {
 		n, err := st.fn()

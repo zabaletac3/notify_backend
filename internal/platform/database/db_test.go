@@ -56,7 +56,8 @@ func TestMigrationsUpDownUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tbl := range []string{"users", "notes", "folders", "tombstones", "devices", "share_links",
-		"refresh_tokens", "verification_codes", "rate_limits", "audit_log"} {
+		"refresh_tokens", "verification_codes", "rate_limits", "audit_log", "auth_tickets",
+		"user_totp", "mfa_recovery_codes", "user_identities", "trusted_devices"} {
 		var ok bool
 		if err := db.Admin.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, tbl).Scan(&ok); err != nil || !ok {
 			t.Errorf("falta la tabla %s", tbl)
@@ -66,11 +67,30 @@ func TestMigrationsUpDownUp(t *testing.T) {
 
 func TestRowLevelSecurityIsEnabledEverywhere(t *testing.T) {
 	db := testdb.New(t)
-	for _, tbl := range []string{"notes", "folders", "tombstones", "devices", "share_links"} {
+	for _, tbl := range []string{"notes", "folders", "tombstones", "devices", "share_links", "user_totp", "mfa_recovery_codes", "trusted_devices"} {
 		var on bool
 		if err := db.Admin.QueryRow(ctx, `SELECT relrowsecurity FROM pg_class WHERE oid = $1::regclass`, tbl).Scan(&on); err != nil || !on {
 			t.Errorf("RLS apagado en %s", tbl)
 		}
+	}
+}
+
+// user_identities se consulta antes de saber quién es la persona: no lleva RLS (igual que
+// refresh_tokens y verification_codes), pero sí grants mínimos.
+func TestUserIdentitiesHasNoRLS(t *testing.T) {
+	db := testdb.New(t)
+	var on bool
+	if err := db.Admin.QueryRow(ctx, `SELECT relrowsecurity FROM pg_class WHERE oid = 'user_identities'::regclass`).Scan(&on); err != nil || on {
+		t.Fatalf("user_identities no debe tener RLS: on=%v err=%v", on, err)
+	}
+	// La API puede escribirla sin cuenta fijada (WithoutUser).
+	a := newUser(t, db, "a@example.com")
+	err := database.WithoutUser(ctx, db.App, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO user_identities (provider, subject, user_id, email) VALUES ('google', 'sub-x', $1, 'a@example.com')`, a)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("la API debe poder escribir user_identities: %v", err)
 	}
 }
 
@@ -177,9 +197,12 @@ func TestEveryRLSTableIsolated(t *testing.T) {
 	db := testdb.New(t)
 	a, b := newUser(t, db, "a@example.com"), newUser(t, db, "b@example.com")
 	inserts := map[string]string{
-		"folders":    `INSERT INTO folders (id, user_id, revision, seq, created_at, updated_at, wrapped_key, payload) VALUES (gen_random_uuid(), $1, 1, 1, now(), now(), '` + sealed + `', '` + sealed + `')`,
-		"tombstones": `INSERT INTO tombstones (user_id, entity, id, revision, seq) VALUES ($1, 'note', gen_random_uuid(), 1, 1)`,
-		"devices":    `INSERT INTO devices (id, user_id, name) VALUES (gen_random_uuid(), $1, 'Portátil')`,
+		"folders":            `INSERT INTO folders (id, user_id, revision, seq, created_at, updated_at, wrapped_key, payload) VALUES (gen_random_uuid(), $1, 1, 1, now(), now(), '` + sealed + `', '` + sealed + `')`,
+		"tombstones":         `INSERT INTO tombstones (user_id, entity, id, revision, seq) VALUES ($1, 'note', gen_random_uuid(), 1, 1)`,
+		"devices":            `INSERT INTO devices (id, user_id, name) VALUES (gen_random_uuid(), $1, 'Portátil')`,
+		"user_totp":          `INSERT INTO user_totp (user_id, secret_enc) VALUES ($1, 't1.AAAAAAAAAAAAAAAA.QUJDRA')`,
+		"mfa_recovery_codes": `INSERT INTO mfa_recovery_codes (user_id, code_hash) VALUES ($1, '\x01')`,
+		"trusted_devices":    `INSERT INTO trusted_devices (id, user_id, name, wrapped_master_key) VALUES (gen_random_uuid(), $1, 'Navegador', '` + sealed + `')`,
 	}
 	for tbl, q := range inserts {
 		if err := database.WithUser(ctx, db.App, a, func(tx pgx.Tx) error { _, err := tx.Exec(ctx, q, a); return err }); err != nil {

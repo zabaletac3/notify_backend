@@ -62,7 +62,8 @@ type Config struct {
 	WriteTimeout    time.Duration `env:"WRITE_TIMEOUT" envDefault:"30s"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"15s"`
 
-	Mail MailConfig
+	Mail   MailConfig
+	Google GoogleConfig
 }
 
 // MailConfig elige el adaptador de correo. Cambiar de proveedor es cambiar
@@ -76,6 +77,15 @@ type MailConfig struct {
 	SMTPPort     int    `env:"SMTP_PORT" envDefault:"587"`
 	SMTPUser     string `env:"SMTP_USER"`
 	SMTPPassword string `env:"SMTP_PASSWORD"`
+}
+
+// GoogleConfig elige el proveedor de identidad de Google. `off` deja las rutas activas pero
+// deshabilitadas (responden 403); `google` usa el OAuth real; `fake` solo vale en dev para pruebas.
+type GoogleConfig struct {
+	Provider     string `env:"GOOGLE_PROVIDER" envDefault:"off"` // off | google | fake
+	ClientID     string `env:"GOOGLE_CLIENT_ID"`
+	ClientSecret string `env:"GOOGLE_CLIENT_SECRET"`
+	RedirectURL  string `env:"GOOGLE_REDIRECT_URL"`
 }
 
 // Load lee el entorno y valida.
@@ -186,6 +196,22 @@ func (c *Config) Validate() error {
 	if !validWebBase(c.WebBaseURL, c.IsProd()) {
 		add("WEB_BASE_URL no es válida (en prod debe ser https y sin ruta)")
 	}
+	switch c.Google.Provider {
+	case "off": // sin proveedor: rutas deshabilitadas, la API arranca igual
+	case "google":
+		if c.Google.ClientID == "" || c.Google.ClientSecret == "" || c.Google.RedirectURL == "" {
+			add("GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET y GOOGLE_REDIRECT_URL son obligatorias con GOOGLE_PROVIDER=google")
+		}
+		if c.Google.RedirectURL != "" && !validRedirectURL(c.Google.RedirectURL, c.Env == "dev") {
+			add("GOOGLE_REDIRECT_URL no es válida (en qa/prod debe ser https con host)")
+		}
+	case "fake":
+		if c.Env != "dev" {
+			add("GOOGLE_PROVIDER=fake solo se admite con APP_ENV=dev")
+		}
+	default:
+		add("GOOGLE_PROVIDER desconocido: %q", c.Google.Provider)
+	}
 	if c.IsProd() {
 		if len(c.AllowedOrigins) == 0 {
 			add("ALLOWED_ORIGINS es obligatoria en prod")
@@ -206,6 +232,15 @@ func validWebBase(raw string, prod bool) bool {
 		return false
 	}
 	return u.Scheme == "https" || (u.Scheme == "http" && !prod)
+}
+
+// validRedirectURL: la URI de redirección de Google; https obligatorio fuera de dev.
+func validRedirectURL(raw string, dev bool) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && dev)
 }
 
 // validCookieDomain acepta un dominio de cookie (con o sin punto inicial) sin esquema, puerto ni ruta.

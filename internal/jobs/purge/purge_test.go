@@ -164,10 +164,16 @@ func TestPurgeHousekeeping(t *testing.T) {
 	f.exec(`INSERT INTO rate_limits (key, count, window_start) VALUES ('viejo', 3, $1), ('nuevo', 3, $2)`, f.now.Add(-day(3)), f.now.Add(-time.Hour))
 	f.exec(`INSERT INTO rate_limits (key, count, window_start, blocked_until) VALUES ('bloqueado', 0, $1, $2)`, f.now.Add(-day(3)), f.now.Add(time.Hour))
 	f.exec(`INSERT INTO audit_log (user_id, event, at) VALUES ($1, 'viejo', $2), ($1, 'nuevo', $3)`, f.alive, f.now.Add(-day(400)), f.now.Add(-day(5)))
+	// Tickets de autenticación: uno caducado hace más de 24 h y uno vigente.
+	f.exec(`INSERT INTO auth_tickets (purpose, token_hash, expires_at) VALUES ('mfa-login', '\x01', $1), ('mfa-login', '\x02', $2)`,
+		f.now.Add(-day(2)), f.now.Add(time.Hour))
 
 	rep := f.run()
-	if rep.Tombstones != 1 || rep.Devices != 1 || rep.RefreshTokens != 1 || rep.Codes != 1 || rep.RateLimits != 1 || rep.Audit != 1 {
+	if rep.Tombstones != 1 || rep.Devices != 1 || rep.RefreshTokens != 1 || rep.Codes != 1 || rep.RateLimits != 1 || rep.Audit != 1 || rep.Tickets != 1 {
 		t.Fatalf("informe: %s", rep)
+	}
+	if f.count(`SELECT count(*) FROM auth_tickets WHERE token_hash = '\x02'`) != 1 {
+		t.Fatal("no debe borrar los tickets vigentes")
 	}
 	if f.count(`SELECT count(*) FROM devices WHERE id = $1`, dOld) != 0 || f.count(`SELECT count(*) FROM devices WHERE id = ANY($1)`, []string{dNew, dLive}) != 2 {
 		t.Fatal("dispositivos")
@@ -177,6 +183,32 @@ func TestPurgeHousekeeping(t *testing.T) {
 	}
 	if f.count(`SELECT count(*) FROM audit_log WHERE event = 'nuevo'`) != 1 {
 		t.Fatal("auditoría reciente")
+	}
+}
+
+func TestPurgeTrustedDevices(t *testing.T) {
+	f := newFixture(t)
+	insert := func(revoked, lastUsed *time.Time) string {
+		id := uuid.Must(uuid.NewV7()).String()
+		f.exec(`INSERT INTO trusted_devices (id, user_id, name, wrapped_master_key, revoked_at, last_used_at)
+			VALUES ($1, $2, 'Navegador', $3, $4, coalesce($5, now()))`, id, f.alive, sealed, revoked, lastUsed)
+		return id
+	}
+	old, stale, recent := f.now.Add(-day(40)), f.now.Add(-day(200)), f.now.Add(-day(5))
+	revokedOld := insert(&old, &recent)       // revocado hace 40 días → se purga
+	revokedRecent := insert(&recent, &recent) // revocado hace poco → se conserva
+	idle := insert(nil, &stale)               // sin usarse en 180 días → se purga
+	live := insert(nil, &recent)              // vigente y usado → se conserva
+
+	rep := f.run()
+	if rep.TrustedDevices != 2 {
+		t.Fatalf("dispositivos de confianza purgados: %d (%s)", rep.TrustedDevices, rep)
+	}
+	if f.count(`SELECT count(*) FROM trusted_devices WHERE id = ANY($1)`, []string{revokedOld, idle}) != 0 {
+		t.Fatal("debía borrar el revocado antiguo y el inactivo")
+	}
+	if f.count(`SELECT count(*) FROM trusted_devices WHERE id = ANY($1)`, []string{revokedRecent, live}) != 2 {
+		t.Fatal("no debe borrar los recientes")
 	}
 }
 
