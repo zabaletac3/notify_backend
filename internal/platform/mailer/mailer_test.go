@@ -84,11 +84,11 @@ func TestResendSends(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
-	m := NewResend("re_secret", "Apunte <no-reply@x.com>", srv.URL)
+	m := NewResend("re_secret", "AxoNote <no-reply@x.com>", srv.URL)
 	if err := m.Send(context.Background(), good); err != nil {
 		t.Fatal(err)
 	}
-	if gotAuth != "Bearer re_secret" || gotKey != "k1" || payload.To[0] != good.To || payload.From != "Apunte <no-reply@x.com>" {
+	if gotAuth != "Bearer re_secret" || gotKey != "k1" || payload.To[0] != good.To || payload.From != "AxoNote <no-reply@x.com>" {
 		t.Fatalf("petición incorrecta: %q %q %+v", gotAuth, gotKey, payload)
 	}
 }

@@ -1,5 +1,5 @@
 [Unit]
-Description=Copia de seguridad cifrada de Apunte
+Description=Copia de seguridad cifrada de AxoNote
 After=network-online.target docker.service
 
 [Service]

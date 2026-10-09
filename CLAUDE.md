@@ -1,6 +1,6 @@
-# Apunte API — guía para asistentes
+# AxoNote API — guía para asistentes
 
-Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). Plan completo: `docs/plans/0006-backend-go.md` en el repo `notify_web` (contrato en `docs/api/openapi.yaml` de ese repo).
+Backend en Go + PostgreSQL de AxoNote (notas con cifrado de extremo a extremo). Plan completo: `docs/plans/0006-backend-go.md` en el repo `notify_web` (contrato en `docs/api/openapi.yaml` de ese repo).
 
 ## Reglas clave
 - **El servidor nunca descifra.** Guarda metadatos + `wrappedKey` + `payload`. Nunca registrar contraseñas, `authKey`, tokens, códigos ni textos de personas.
@@ -32,7 +32,7 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Cuerpos JSON estrictos (`decode`: tipo, sin campos desconocidos, sin datos de más).
 - Anti-enumeración: `register`, `resend-code`, `forgot` y `prelogin` responden igual exista o no la cuenta; el correo se envía en segundo plano (`Service.send`) para no filtrar por tiempo.
 - Sesión: acceso JWT corto + renovación opaca con rotación; reusar un token gastado revoca la familia y el dispositivo. El dispositivo del token (`did`) se comprueba en cada petición (`device-revoked`).
-- Modo cookie (web, `X-Apunte-Session: cookie` en `login`/`verify-email`/`refresh`/`logout`): el refresh token viaja solo en la cookie `apunte_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/auth`, `Domain` solo si `COOKIE_DOMAIN`; `accessToken` sigue en el cuerpo); sin la cabecera todo es como antes (refreshToken en el cuerpo). Otra cabecera → 422. CSRF: en modo cookie un `Origin` presente debe estar en `ALLOWED_ORIGINS` (`403 forbidden/csrf`); CORS con credenciales y sin comodín. `/auth/logout` está **fuera** del grupo protegido: en modo cookie revoca por el Bearer si vale o por la cookie, y siempre responde 204 borrando la cookie; en modo cuerpo exige Bearer. `COOKIE_SECURE` por defecto true (false solo en dev; inválido en qa/prod).
+- Modo cookie (web, `X-AxoNote-Session: cookie` en `login`/`verify-email`/`refresh`/`logout`): el refresh token viaja solo en la cookie `axonote_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/auth`, `Domain` solo si `COOKIE_DOMAIN`; `accessToken` sigue en el cuerpo); sin la cabecera todo es como antes (refreshToken en el cuerpo). Otra cabecera → 422. CSRF: en modo cookie un `Origin` presente debe estar en `ALLOWED_ORIGINS` (`403 forbidden/csrf`); CORS con credenciales y sin comodín. `/auth/logout` está **fuera** del grupo protegido: en modo cookie revoca por el Bearer si vale o por la cookie, y siempre responde 204 borrando la cookie; en modo cuerpo exige Bearer. `COOKIE_SECURE` por defecto true (false solo en dev; inválido en qa/prod).
 - La API no puede borrar usuarios; solo `discard_unverified_user()` (migración 00004) elimina registros sin verificar.
 
 ## Claves y recuperación
@@ -63,3 +63,8 @@ Backend en Go + PostgreSQL de Apunte (notas con cifrado de extremo a extremo). P
 - Cuatro roles de BD: owner (migraciones), API (RLS), purga (`apunte_maint`) y copias (`BYPASSRLS` solo lectura). Nunca usar el de migraciones ni el de copias en la API.
 - `cmd/purge` (idempotente, por lotes) y `deploy/backup.sh` + `restore-test.sh`; temporizadores systemd en `deploy/`. Los trabajos avisan a un servicio de «latido» (`*_PING_URL`) para alertar si dejan de ejecutarse.
 - Las migraciones nuevas que añadan tablas con datos de personas deben decidir su política de purga y, si tienen RLS, su política para `apunte_maint`.
+
+## Nombres históricos
+- La marca es **AxoNote** (antes «Apunte»); los nombres vigentes de la sesión web son `X-AxoNote-Session` y la cookie `axonote_rt`.
+- Los identificadores internos y operativos conservan «apunte» **a propósito** (se renombrarán en otra fase): roles de PostgreSQL, base y URLs de ejemplo, migraciones, rutas `/opt/apunte` y `/etc/apunte`, unidades systemd, bucket, imagen y dominios. Ver `docs/security.md` («Nombres históricos»).
+- Las etiquetas que ya forman parte de datos emitidos no se tocan: audiencia JWT `apunte-api` y prefijos `apunte/v1/…` de `kid`/HKDF.

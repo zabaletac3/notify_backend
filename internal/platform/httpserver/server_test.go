@@ -89,7 +89,7 @@ func TestCORSAllowsCredentialsAndSessionHeader(t *testing.T) {
 	pre := map[string]string{
 		"Origin":                         "https://app.example.com",
 		"Access-Control-Request-Method":  "POST",
-		"Access-Control-Request-Headers": "X-Apunte-Session",
+		"Access-Control-Request-Headers": "X-AxoNote-Session",
 	}
 	ok := do(h, "OPTIONS", "/health", "", pre)
 	if got := ok.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
@@ -98,8 +98,8 @@ func TestCORSAllowsCredentialsAndSessionHeader(t *testing.T) {
 	if ok.Header().Get("Access-Control-Allow-Credentials") != "true" {
 		t.Fatalf("con cookies debe permitir credenciales: %v", ok.Header())
 	}
-	if !strings.Contains(ok.Header().Get("Access-Control-Allow-Headers"), "X-Apunte-Session") {
-		t.Fatalf("no permite X-Apunte-Session: %q", ok.Header().Get("Access-Control-Allow-Headers"))
+	if !strings.Contains(strings.ToLower(ok.Header().Get("Access-Control-Allow-Headers")), strings.ToLower("X-AxoNote-Session")) {
+		t.Fatalf("no permite X-AxoNote-Session: %q", ok.Header().Get("Access-Control-Allow-Headers"))
 	}
 	// Con credenciales nunca se responde un origen comodín.
 	if ok.Header().Get("Access-Control-Allow-Origin") == "*" {

@@ -38,26 +38,26 @@ func TestLogsNeverContainSecrets(t *testing.T) {
 
 	// Modo cookie: el valor de la cookie de refresco tampoco debe acabar en los registros.
 	cookieLogin := e.Do("POST", "/auth/login", map[string]any{"email": email, "authKey": testutil.AuthKey}, "", "",
-		testutil.Header("X-Apunte-Session", "cookie"))
+		testutil.Header("X-AxoNote-Session", "cookie"))
 	var cookieRT string
 	for _, c := range cookieLogin.Cookies {
-		if c.Name == "apunte_rt" {
+		if c.Name == "axonote_rt" {
 			cookieRT = c.Value
 		}
 	}
 	if cookieRT == "" {
 		t.Fatal("el login en modo cookie no entregó la cookie de refresco")
 	}
-	cookieRefresh := e.Do("POST", "/auth/refresh", nil, "", "", testutil.Header("X-Apunte-Session", "cookie"),
-		testutil.Cookie(&http.Cookie{Name: "apunte_rt", Value: cookieRT}))
+	cookieRefresh := e.Do("POST", "/auth/refresh", nil, "", "", testutil.Header("X-AxoNote-Session", "cookie"),
+		testutil.Cookie(&http.Cookie{Name: "axonote_rt", Value: cookieRT}))
 	var rotatedRT string
 	for _, c := range cookieRefresh.Cookies {
-		if c.Name == "apunte_rt" {
+		if c.Name == "axonote_rt" {
 			rotatedRT = c.Value
 		}
 	}
-	e.Do("POST", "/auth/logout", nil, "", "", testutil.Header("X-Apunte-Session", "cookie"),
-		testutil.Cookie(&http.Cookie{Name: "apunte_rt", Value: rotatedRT}))
+	e.Do("POST", "/auth/logout", nil, "", "", testutil.Header("X-AxoNote-Session", "cookie"),
+		testutil.Cookie(&http.Cookie{Name: "axonote_rt", Value: rotatedRT}))
 
 	e.Do("POST", "/auth/password/forgot", map[string]any{"email": email}, "", "")
 	e.Auth.Close()

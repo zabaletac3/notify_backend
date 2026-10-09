@@ -1,4 +1,4 @@
-// Command api arranca el servidor HTTP de Apunte.
+// Command api arranca el servidor HTTP de AxoNote.
 package main
 
 import (

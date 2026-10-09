@@ -138,7 +138,7 @@ func TestChangePassword(t *testing.T) {
 	if k["kdf"].(map[string]any)["salt"] != "BBBBBBBBBBBBBBBBBBBBBB" {
 		t.Fatalf("la sal nueva no se guardó: %v", k["kdf"])
 	}
-	if e.mailsTo("ana@example.com", "contraseña de Apunte cambió") != 1 {
+	if e.mailsTo("ana@example.com", "contraseña de AxoNote cambió") != 1 {
 		t.Fatal("falta el aviso por correo")
 	}
 }
@@ -310,7 +310,7 @@ func TestResetKeepPreservesNotes(t *testing.T) {
 	if r := e.call("POST", "/auth/password/reset", resetBody(token, "keep", recKey), "", ""); r.Code != 422 || r.Body["fields"].(map[string]any)["token"] != "invalid-token" {
 		t.Fatalf("token reutilizado: %d %s", r.Code, r.Raw)
 	}
-	if e.mailsTo("ana@example.com", "contraseña de Apunte cambió") != 1 {
+	if e.mailsTo("ana@example.com", "contraseña de AxoNote cambió") != 1 {
 		t.Fatal("falta el aviso por correo")
 	}
 }

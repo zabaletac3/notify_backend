@@ -1,6 +1,6 @@
 # notify_backend
 
-API de Apunte (Go + PostgreSQL). Ver `CLAUDE.md` y el plan 0006 en `notify_web`.
+API de AxoNote (Go + PostgreSQL). Ver `CLAUDE.md` y el plan 0006 en `notify_web`.
 
 ```bash
 cp .env.example .env      # edita los secretos

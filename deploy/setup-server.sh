@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepara un Ubuntu LIMPIO (22.04/24.04) para alojar Apunte: usuario de despliegue, SSH solo con llave,
+# Prepara un Ubuntu LIMPIO (22.04/24.04) para alojar AxoNote: usuario de despliegue, SSH solo con llave,
 # firewall (SSH + 80/443 solo desde Cloudflare), fail2ban, actualizaciones automáticas, Docker, restic y
 # las carpetas de secretos. Es idempotente: se puede repetir.
 #

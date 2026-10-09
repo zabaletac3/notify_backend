@@ -1,5 +1,5 @@
 [Unit]
-Description=Purga diaria de Apunte (papelera, cuentas eliminadas, sesiones caducadas)
+Description=Purga diaria de AxoNote (papelera, cuentas eliminadas, sesiones caducadas)
 After=docker.service
 Requires=docker.service
 

@@ -34,7 +34,7 @@ var (
 )
 
 // refreshCookieName es el nombre de la cookie del modo cookie (debe coincidir con el módulo auth).
-const refreshCookieName = "apunte_rt"
+const refreshCookieName = "axonote_rt"
 
 type env struct {
 	t    *testing.T
@@ -90,7 +90,7 @@ func header(k, v string) opt        { return func(r *http.Request) { r.Header.Se
 func withCookie(c *http.Cookie) opt { return func(r *http.Request) { r.AddCookie(c) } }
 
 // cookieMode activa el modo cookie de la sesión.
-func cookieMode() opt { return header("X-Apunte-Session", "cookie") }
+func cookieMode() opt { return header("X-AxoNote-Session", "cookie") }
 
 // origin fija el origen de la petición (CSRF).
 func origin(v string) opt { return header("Origin", v) }
@@ -675,7 +675,7 @@ func TestVerifyAttemptsAreCappedPerAccountAcrossIPs(t *testing.T) {
 	}
 }
 
-// ── Modo cookie (X-Apunte-Session: cookie) ──────────────────────────────────
+// ── Modo cookie (X-AxoNote-Session: cookie) ──────────────────────────────────
 
 func TestLoginCookieMode(t *testing.T) {
 	e := newEnv(t)
@@ -867,7 +867,7 @@ func TestCookieModeCSRF(t *testing.T) {
 		t.Fatalf("csrf logout: %d %s", r.Code, r.Raw)
 	}
 	// Un valor de cabecera distinto de `cookie` es 422.
-	bad := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", header("X-Apunte-Session", "bogus"))
+	bad := e.call("POST", "/auth/login", loginBody("ana@example.com", "Navegador", "web"), "", "", header("X-AxoNote-Session", "bogus"))
 	if bad.Code != 422 || bad.Body["kind"] != "validation" {
 		t.Fatalf("cabecera inválida: %d %s", bad.Code, bad.Raw)
 	}

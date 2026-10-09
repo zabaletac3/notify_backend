@@ -69,7 +69,7 @@ type Config struct {
 // MAIL_PROVIDER (y su clave): el resto de la app solo conoce la interfaz.
 type MailConfig struct {
 	Provider     string `env:"MAIL_PROVIDER" envDefault:"log"` // log | resend | smtp
-	From         string `env:"MAIL_FROM" envDefault:"Apunte <no-reply@localhost>"`
+	From         string `env:"MAIL_FROM" envDefault:"AxoNote <no-reply@localhost>"`
 	ResendAPIKey string `env:"RESEND_API_KEY"`
 	// SMTP (MAIL_PROVIDER=smtp). Puerto 465 = TLS implícito; otro (587) = STARTTLS obligatorio.
 	SMTPHost     string `env:"SMTP_HOST"`
