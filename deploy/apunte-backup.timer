@@ -1,5 +1,5 @@
 [Unit]
-Description=Copia de seguridad diaria de Apunte
+Description=Copia de seguridad diaria de AxoNote
 
 [Timer]
 OnCalendar=*-*-* 02:10:00

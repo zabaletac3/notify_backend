@@ -24,7 +24,7 @@ func setSMTP(t *testing.T) {
 	t.Setenv("SMTP_HOST", "smtp.gmail.com")
 	t.Setenv("SMTP_USER", "ana@gmail.com")
 	t.Setenv("SMTP_PASSWORD", "app-password")
-	t.Setenv("MAIL_FROM", "Apunte <ana@gmail.com>")
+	t.Setenv("MAIL_FROM", "AxoNote <ana@gmail.com>")
 }
 
 func TestSMTPValid(t *testing.T) {

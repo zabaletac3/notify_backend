@@ -95,7 +95,7 @@ func TestEmailChangeFlow(t *testing.T) {
 	if x := confirm("nuevo@example.com", code); x.Code != 422 {
 		t.Fatalf("código reutilizado: %d", x.Code)
 	}
-	if e.mailsTo("ana@example.com", "correo de tu cuenta de Apunte cambió") != 1 {
+	if e.mailsTo("ana@example.com", "correo de tu cuenta de AxoNote cambió") != 1 {
 		t.Fatal("falta el aviso al correo anterior")
 	}
 }

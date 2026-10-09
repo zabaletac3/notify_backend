@@ -1,5 +1,5 @@
 [Unit]
-Description=Purga diaria de Apunte
+Description=Purga diaria de AxoNote
 
 [Timer]
 OnCalendar=*-*-* 03:20:00

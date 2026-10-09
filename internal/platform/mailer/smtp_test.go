@@ -101,7 +101,7 @@ func (f *fakeSMTP) serve(c net.Conn) {
 
 func testSMTP(t *testing.T, f *fakeSMTP) *SMTPMailer {
 	t.Helper()
-	m, err := NewSMTP("127.0.0.1", f.port(), "ana@gmail.com", "secreto", "Apunte <ana@gmail.com>")
+	m, err := NewSMTP("127.0.0.1", f.port(), "ana@gmail.com", "secreto", "AxoNote <ana@gmail.com>")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestSMTPSend(t *testing.T) {
 	if f.auth == "" {
 		t.Fatal("no se autenticó")
 	}
-	for _, want := range []string{"From: \"Apunte\" <ana@gmail.com>", "To: bob@example.com", "Subject: =?utf-8?q?", "multipart/alternative", "text/plain", "text/html", "123456"} {
+	for _, want := range []string{"From: \"AxoNote\" <ana@gmail.com>", "To: bob@example.com", "Subject: =?utf-8?q?", "multipart/alternative", "text/plain", "text/html", "123456"} {
 		if !strings.Contains(f.data, want) {
 			t.Errorf("falta %q en el mensaje:\n%s", want, f.data)
 		}

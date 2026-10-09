@@ -12,7 +12,7 @@ Este documento mapea los controles del backend con la evidencia que los respalda
 | Adivinar códigos de 6 dígitos | 5 intentos por código, 15/h por cuenta (cualquier IP) | `TestVerifyAttemptsAreCappedPerAccountAcrossIPs` |
 | Enumerar cuentas | Registro, reenvío, olvido, prelogin y cambio de correo responden igual; correo asíncrono; hash ficticio | `TestRegisterDoesNotRevealExistingAccounts`, `TestForgotPasswordHidesAccountsAndThrottles`, `TestDummyVerifyCostsLikeRealVerify` |
 | Robo de token de renovación | Rotación + detección de reutilización (revoca la familia) | `TestRefreshRotationAndReuseDetection`, `TestRefreshCookieRotationAndReuse` |
-| CSRF en la sesión web | Modo cookie (`X-Apunte-Session: cookie`): la cabecera obliga al preflight CORS; un `Origin` presente debe estar en `ALLOWED_ORIGINS` (`403 forbidden/csrf`); CORS con credenciales y sin comodín; la cookie es `HttpOnly; Secure; SameSite=Strict` | `TestCookieModeCSRF`, `TestCORSAllowsCredentialsAndSessionHeader` |
+| CSRF en la sesión web | Modo cookie (`X-AxoNote-Session: cookie`): la cabecera obliga al preflight CORS; un `Origin` presente debe estar en `ALLOWED_ORIGINS` (`403 forbidden/csrf`); CORS con credenciales y sin comodín; la cookie es `HttpOnly; Secure; SameSite=Strict` | `TestCookieModeCSRF`, `TestCORSAllowsCredentialsAndSessionHeader` |
 | Token manipulado | Solo HS256, emisor/audiencia/caducidad obligatorias, `kid`, rotación de secreto | `TestJWTRejectsTampering`, `FuzzJWTParse` |
 | Inyección SQL / de cabeceras | Solo consultas parametrizadas; validación estricta; NUL rechazado | `TestHostileStringsNeverCauseServerErrors` |
 | Secretos en registros | Registro por patrón de ruta, sin cuerpos, cabeceras ni correos completos | `TestLogsNeverContainSecrets` |
@@ -24,12 +24,18 @@ Este documento mapea los controles del backend con la evidencia que los respalda
 
 ## Cookies y CSRF (decisión D15)
 
-La web activa el modo cookie con la cabecera `X-Apunte-Session: cookie` en `login`, `verify-email`, `refresh` y `logout`. Entonces el token de renovación viaja **solo** como cookie `apunte_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/auth`, sin `Domain` salvo `COOKIE_DOMAIN`) y no aparece en el JSON; el token de acceso sigue en el cuerpo. Sin la cabecera nada cambia (escritorio, móvil y bundles antiguos).
+La web activa el modo cookie con la cabecera `X-AxoNote-Session: cookie` en `login`, `verify-email`, `refresh` y `logout`. Entonces el token de renovación viaja **solo** como cookie `axonote_rt` (`HttpOnly; Secure; SameSite=Strict; Path=/v1/auth`, sin `Domain` salvo `COOKIE_DOMAIN`) y no aparece en el JSON; el token de acceso sigue en el cuerpo. Sin la cabecera nada cambia (escritorio, móvil y bundles antiguos).
 
 - **Anti-CSRF**: la cabecera personalizada fuerza el preflight CORS y un `Origin` presente debe coincidir exactamente con un origen de `ALLOWED_ORIGINS` (si no, `403 forbidden/csrf`). Las peticiones sin `Origin` (clientes no navegador) se permiten. CORS usa credenciales con orígenes explícitos, nunca comodín.
 - **Logout**: en modo cookie funciona aunque el token de acceso haya vencido (revoca por la cookie) y **siempre** responde `204` borrando la cookie (`Max-Age=0`); es idempotente y no revela si la cookie valía.
 - **`COOKIE_SECURE`**: por defecto `true`; `false` solo en dev, y en qa/prod la configuración falla al arrancar si es `false`.
 - **Despliegue**: `SameSite=Strict` exige que la web y la API compartan **dominio registrable** (p. ej. `apunte.app` y `api.apunte.app`). Una web en `*.pages.dev` con la API en otro dominio no recibiría la cookie.
+
+## Nombres históricos
+
+La marca actual es **AxoNote** (antes «Apunte»). Los nombres de sesión web vigentes son `X-AxoNote-Session` y la cookie `axonote_rt`.
+
+Algunos identificadores internos y operativos conservan «apunte» **a propósito** y se renombrarán en otra fase: roles de PostgreSQL (`apunte_owner`, `apunte_api`, `apunte_purge`, `apunte_backup`, grupos `apunte_app`/`apunte_maint`), el nombre de la base y las URLs de conexión de ejemplo, las migraciones, las rutas del servidor (`/opt/apunte`, `/etc/apunte`, `/usr/local/sbin/apunte-*`, `99-apunte.conf`), los proyectos/contenedores/unidades systemd, el bucket `apunte-backups`, `apunte.dump` y la imagen `apunte-api`. Tampoco cambian las etiquetas criptográficas que contienen «apunte» (audiencia JWT `apunte-api`, prefijos `apunte/v1/…` de `kid` y HKDF) porque forman parte de datos ya emitidos.
 
 ## Fuzzing
 

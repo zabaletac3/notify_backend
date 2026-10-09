@@ -1,4 +1,4 @@
--- Roles de PostgreSQL de Apunte. Se ejecuta UNA vez por base de datos, como administrador, antes de la
+-- Roles de PostgreSQL de AxoNote. Se ejecuta UNA vez por base de datos, como administrador, antes de la
 -- primera migración, con las contraseñas como variables de psql (lo hace deploy/init-db.sh):
 --
 --   psql -v ON_ERROR_STOP=1 -v owner_pw=… -v api_pw=… -v purge_pw=… -v backup_pw=… -v dbname=apunte -f db-roles.sql

@@ -22,7 +22,7 @@ type Handler struct {
 }
 
 // CookieOptions describe cómo se emite la cookie de sesión del modo cookie (web). Solo afecta a las
-// peticiones que traen `X-Apunte-Session: cookie`; sin esa cabecera nada cambia.
+// peticiones que traen `X-AxoNote-Session: cookie`; sin esa cabecera nada cambia.
 type CookieOptions struct {
 	Secure         bool     // atributo Secure de la cookie
 	Domain         string   // dominio de la cookie; vacío = host-only
@@ -31,10 +31,10 @@ type CookieOptions struct {
 
 const (
 	// sessionHeader activa el modo cookie. Cualquier otro valor que no sea `cookie` es un 422.
-	sessionHeader     = "X-Apunte-Session"
+	sessionHeader     = "X-AxoNote-Session"
 	sessionCookieMode = "cookie"
 	// refreshCookie es el nombre y la ruta de la cookie con el token de renovación.
-	refreshCookieName = "apunte_rt"
+	refreshCookieName = "axonote_rt"
 	refreshCookiePath = "/v1/auth"
 )
 
