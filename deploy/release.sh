@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Despliega una imagen en un ambiente: descarga → migra → arranca → espera a que esté sana.
+# Despliega una imagen en un ambiente: descarga → respalda → migra → arranca → espera a que esté sana.
 # Si la API no queda sana, vuelve sola a la versión anterior.
 #
 #   deploy/release.sh qa|prod <etiqueta-de-imagen>      p. ej.  deploy/release.sh prod v1.2.0
@@ -21,6 +21,30 @@ echo ">> $ENV_NAME: ${PREVIOUS:-(primera vez)} → $TAG"
 docker network inspect apunte_edge >/dev/null 2>&1 || docker network create apunte_edge >/dev/null
 compose "$TAG" pull api migrate
 compose "$TAG" up -d postgres
+
+# Respaldo previo a migrar: un rollback de la API NO deshace migraciones, este volcado sí permite volver
+# al estado anterior. Si no se puede respaldar (o el volcado no se lee), no se migra ni se despliega.
+# Se conservan los 10 últimos. Los respaldos programados cada 6 h son aparte (apunte-db-backup.timer).
+PG="apunte-${ENV_NAME}-postgres-1"
+BACKUPS="/opt/apunte/backups/${ENV_NAME}/pre-migrate"
+for _ in $(seq 1 30); do
+  [[ "$(docker inspect --format '{{.State.Health.Status}}' "$PG" 2>/dev/null || echo starting)" == "healthy" ]] && break
+  sleep 2
+done
+[[ "$(docker inspect --format '{{.State.Health.Status}}' "$PG" 2>/dev/null || echo starting)" == "healthy" ]] \
+  || { echo "!! postgres no está sano: no se migra sin respaldo" >&2; exit 1; }
+mkdir -p "$BACKUPS"; chmod 700 "$BACKUPS"
+DUMP="$BACKUPS/pre-${TAG}-$(date -u +%Y%m%d-%H%M%S).dump"
+trap 'rm -f "$DUMP.tmp"' EXIT
+( umask 077
+  PGPASSWORD="$(grep -m1 '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)" \
+    docker exec -e PGPASSWORD "$PG" pg_dump -h 127.0.0.1 -U postgres -d apunte -Fc > "$DUMP.tmp" )
+docker exec -i "$PG" pg_restore -l < "$DUMP.tmp" >/dev/null \
+  || { echo "!! el respaldo no es legible: no se migra" >&2; exit 1; }
+mv "$DUMP.tmp" "$DUMP"
+find "$BACKUPS" -maxdepth 1 -name 'pre-*.dump' -printf '%T@ %p\n' | sort -rn | tail -n +11 | cut -d' ' -f2- | xargs -r rm -f
+echo ">> respaldo previo a migrar: $DUMP ($(du -h "$DUMP" | cut -f1))"
+
 compose "$TAG" run --rm migrate          # migraciones compatibles hacia atrás: la versión anterior sigue funcionando
 compose "$TAG" up -d --no-deps api
 
