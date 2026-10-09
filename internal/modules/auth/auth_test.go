@@ -20,6 +20,7 @@ import (
 	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"github.com/zabaletac3/notify_backend/internal/platform/httpserver"
 	"github.com/zabaletac3/notify_backend/internal/platform/mailer"
+	"github.com/zabaletac3/notify_backend/internal/platform/oidc"
 	"github.com/zabaletac3/notify_backend/internal/platform/ratelimit"
 	"github.com/zabaletac3/notify_backend/internal/platform/security"
 	"github.com/zabaletac3/notify_backend/internal/platform/testdb"
@@ -36,6 +37,9 @@ var (
 // refreshCookieName es el nombre de la cookie del modo cookie (debe coincidir con el módulo auth).
 const refreshCookieName = "axonote_rt"
 
+// authFakeCallback es el callback que devuelve el proveedor simulado de Google.
+const authFakeCallback = "http://api.test/v1/auth/google/callback"
+
 type env struct {
 	t    *testing.T
 	h    http.Handler
@@ -43,14 +47,23 @@ type env struct {
 	svc  *auth.Service
 	db   *testdb.DB
 	now  time.Time
+	oidc oidc.Provider
+	fake *oidc.Fake
 }
 
-func newEnv(t *testing.T) *env { return newEnvOpts(t, true) }
+func newEnv(t *testing.T) *env { return newEnvOIDC(t, true, oidc.NewFake(authFakeCallback)) }
 
 func newEnvOpts(t *testing.T, secure bool) *env {
+	return newEnvOIDC(t, secure, oidc.NewFake(authFakeCallback))
+}
+
+func newEnvOIDC(t *testing.T, secure bool, provider oidc.Provider) *env {
 	t.Helper()
 	db := testdb.New(t)
-	e := &env{t: t, db: db, mail: &mailer.MemoryMailer{}, now: time.Now().UTC()}
+	e := &env{t: t, db: db, mail: &mailer.MemoryMailer{}, now: time.Now().UTC(), oidc: provider}
+	if f, ok := provider.(*oidc.Fake); ok {
+		e.fake = f
+	}
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	hasher, err := security.NewAuthKeyHasher(pepper)
 	if err != nil {
@@ -62,7 +75,7 @@ func newEnvOpts(t *testing.T, secure bool) *env {
 	}
 	limiter := ratelimit.New(db.App, pepper)
 	limiter.Now = func() time.Time { return e.now }
-	e.svc = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: e.mail, Log: log,
+	e.svc = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: e.mail, OIDC: provider, Log: log,
 		Config: auth.Config{Pepper: pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 30 * 24 * time.Hour, WebBaseURL: "http://web.test"},
 		Now:    func() time.Time { return e.now }})
 	t.Cleanup(e.svc.Close)

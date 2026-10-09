@@ -23,10 +23,17 @@ Idempotente; borra, por lotes:
 | Cuentas eliminadas (con todo lo suyo, en cascada) | > 30 días | `ACCOUNT_GRACE_DAYS` |
 | Lápidas | > 90 días | — |
 | Dispositivos cerrados | > 30 días | — |
+| Dispositivos de confianza revocados | > 30 días | — |
+| Dispositivos de confianza sin usarse | > 180 días | — |
 | Tokens de renovación caducados o revocados | > 7 días | — |
 | Códigos de verificación caducados o usados | > 1 día | — |
+| Tickets de autenticación (segundo paso MFA, Google) caducados | > 1 día | — |
 | Contadores de límites sin actividad ni bloqueo | > 2 días | — |
 | Auditoría | > 365 días | `AUDIT_RETENTION_DAYS` |
+
+`user_totp` (secreto TOTP) y `mfa_recovery_codes` no tienen plazo propio: se borran en cascada con la cuenta. La política es la de la cuenta (`ON DELETE CASCADE`).
+
+`user_identities` (identidades de Google, por `sub`) tampoco tiene plazo propio: se borra en cascada con la cuenta. Los tickets de Google (`google-state`, `google-result`, `google-link`, `google-signup`) son filas de `auth_tickets` y se purgan con ellas a las 24 h de caducar.
 
 Instalación (solo en prod): copia `deploy/apunte-purge.{service,timer}` a `/etc/systemd/system/`, crea `/etc/apunte/prod.purge.env` (`chmod 600`) con `PURGE_DATABASE_URL=postgres://apunte_purge:…@postgres:5432/apunte?sslmode=disable` y, si quieres alertas, `PURGE_PING_URL`; después `systemctl enable --now apunte-purge.timer`. Corre dentro de la red interna de la pila, con la misma imagen de la API. Ver los resultados: `journalctl -u apunte-purge`.
 

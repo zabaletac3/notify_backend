@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -91,6 +92,9 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, req *Password
 			return err
 		}
 		if err := s.revokeSessions(ctx, tx, p.UserID, p.DeviceID); err != nil {
+			return err
+		}
+		if err := s.revokeTrustedDevices(ctx, tx, p.UserID); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, p.UserID, "password-change")
@@ -301,7 +305,12 @@ func (s *Service) ResetBundle(ctx context.Context, ip, token string) (*PasswordR
 			return err
 		}
 		out = &PasswordResetBundle{UserID: u.ID, RecoveryWrappedMasterKey: u.RecoveryMK, Kdf: u.Kdf}
-		return nil
+		// user_totp está protegida por RLS: hace falta fijar la cuenta antes de leerla.
+		if err := database.SetUser(ctx, tx, u.ID); err != nil {
+			return err
+		}
+		out.MFAEnabled, err = mfaEnabled(ctx, tx, u.ID)
+		return err
 	})
 	if err != nil {
 		return nil, apperrors.Internal(err)
@@ -329,6 +338,9 @@ func (s *Service) ResetPassword(ctx context.Context, ip string, req *PasswordRes
 	if code := validateKeys(&req.Keys); code != "" {
 		fields["keys"] = code
 	}
+	if req.Mode == "wipe" && req.DisableMFA {
+		fields["disableMfa"] = "invalid-payload"
+	}
 	if len(fields) > 0 {
 		return apperrors.Validation(fields)
 	}
@@ -348,8 +360,9 @@ func (s *Service) ResetPassword(ctx context.Context, ip string, req *PasswordRes
 	kdf, _ := json.Marshal(req.Keys.Kdf)
 
 	var (
-		failure error
-		email   string
+		failure     error
+		email       string
+		disabledMFA bool
 	)
 	err = database.WithoutUser(ctx, s.Pool, func(tx pgx.Tx) error {
 		codeID, u, err := s.resetTarget(ctx, tx, req.Token)
@@ -386,6 +399,45 @@ func (s *Service) ResetPassword(ctx context.Context, ip string, req *PasswordRes
 		if err := database.SetUser(ctx, tx, u.ID); err != nil {
 			return err
 		}
+		mfaOn, err := mfaEnabled(ctx, tx, u.ID)
+		if err != nil {
+			return err
+		}
+		if mfaOn && req.Mode == "wipe" {
+			// Borrar las notas sin el segundo factor sería una puerta trasera: exigimos código.
+			if strings.TrimSpace(req.MFACode) == "" {
+				failure = apperrors.Validation(map[string]string{"mfaCode": "required"})
+				return nil
+			}
+			if err := s.blocked(ctx, s.Limiter.Key("mfa", u.ID)); err != nil {
+				failure = err
+				return nil
+			}
+			ok, err := s.verifySecondFactor(ctx, tx, u.ID, req.MFACode)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				if _, ferr := s.Limiter.Fail(ctx, s.Limiter.Key("mfa", u.ID), mfaAccountRule); ferr != nil {
+					failure = apperrors.Unavailable(ferr)
+					return nil
+				}
+				failure = apperrors.Validation(map[string]string{"mfaCode": "invalid-code"})
+				return nil
+			}
+		}
+		if req.Mode == "keep" && req.DisableMFA && mfaOn {
+			if _, err := tx.Exec(ctx, `DELETE FROM user_totp WHERE user_id = $1`, u.ID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM mfa_recovery_codes WHERE user_id = $1`, u.ID); err != nil {
+				return err
+			}
+			if err := s.audit(ctx, tx, u.ID, "mfa-disable-recovery"); err != nil {
+				return err
+			}
+			disabledMFA = true
+		}
 		now := s.Now()
 		if req.Mode == "keep" {
 			keys, _ := json.Marshal(map[string]string{"wrappedMasterKey": req.Keys.WrappedMasterKey, "recoveryWrappedMasterKey": u.RecoveryMK})
@@ -393,7 +445,7 @@ func (s *Service) ResetPassword(ctx context.Context, ip string, req *PasswordRes
 				u.ID, newHash, kdf, keys)
 		} else {
 			// Empezar de cero: lo cifrado con la clave anterior ya no se podría leer.
-			for _, q := range []string{`DELETE FROM share_links`, `DELETE FROM notes`, `DELETE FROM folders`, `DELETE FROM tombstones`} {
+			for _, q := range []string{`DELETE FROM share_links`, `DELETE FROM notes`, `DELETE FROM folders`, `DELETE FROM tombstones`, `DELETE FROM trusted_devices`} {
 				if _, err = tx.Exec(ctx, q); err != nil {
 					return err
 				}
@@ -404,6 +456,12 @@ func (s *Service) ResetPassword(ctx context.Context, ip string, req *PasswordRes
 		}
 		if err != nil {
 			return err
+		}
+		if req.Mode == "keep" {
+			// La MK no cambia, pero cambiar la contraseña invalida la confianza existente.
+			if err = s.revokeTrustedDevices(ctx, tx, u.ID); err != nil {
+				return err
+			}
 		}
 		if _, err = tx.Exec(ctx, `UPDATE verification_codes SET consumed_at = $2 WHERE id = $1`, codeID, now); err != nil {
 			return err
@@ -419,6 +477,6 @@ func (s *Service) ResetPassword(ctx context.Context, ip string, req *PasswordRes
 	if failure != nil {
 		return failure
 	}
-	s.send(passwordChangedMail(email))
+	s.send(passwordChangedMailMFA(email, disabledMFA))
 	return nil
 }

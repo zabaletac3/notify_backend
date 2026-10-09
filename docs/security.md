@@ -77,9 +77,26 @@ Revisa que: `/v1/*` sin sesión responda 401; no haya `Server`/`X-Powered-By`; H
 
 ## Limitaciones conocidas (a propósito, con su motivo)
 
-- **Verificación en dos pasos (D12)**: aún no existe; `twoFactor: true` se rechaza para no dar falsa seguridad.
+- **Acceso con Google y verificación en dos pasos**: implementados (ADR 0006). Google es solo identidad: toda cuenta sigue teniendo contraseña y clave de recuperación. El MFA (TOTP + códigos de respaldo) se exige en toda sesión nueva, también por Google. El servidor conoce el secreto TOTP, pero no puede leer las notas.
 - **Reutilización de un token de renovación** revoca toda la sesión también cuando el cliente reintenta por un fallo de red (dos pestañas a la vez). Es el compromiso seguro; el cliente debe serializar sus renovaciones.
 - **`DELETE /me` no pide la contraseña** (el contrato actual no lo prevé): mitigado por el periodo de gracia, el aviso por correo y la recuperación al restablecer.
 - **Acciones de GitHub** fijadas por versión (Dependabot las mantiene), no por SHA.
 - **Un cliente web comprometido (XSS)** puede leer la clave maestra en memoria: por eso la web mantiene una CSP estricta (ADR 0005 de `notify_web`).
-- **Imágenes (D5) y Google (D8)**: diferidos.
+- **Imágenes (D5)**: diferidas.
+
+## Acceso con Google
+
+Google es **solo identidad** (ADR 0006): no entrega ningún secreto que el servidor no vea, así que no permite descifrar las notas; toda cuenta tiene contraseña y clave de recuperación. El flujo es OAuth de código de autorización con PKCE por redirección; el callback no emite cookies y el resultado viaja en el fragmento de la URL (no llega al servidor web ni en el `Referer`). El `id_token` se valida (RS256, `iss`, `aud`, `exp`, `nonce`).
+
+- **Excepción aceptada a la anti-enumeración**: `POST /auth/google/exchange` responde `link-required` o `signup-required`, que revelan si existe una cuenta con ese correo. Se acepta porque solo lo ve quien ha demostrado ante Google (un tercero) que el correo es suyo, y las respuestas son iguales salvo por ese hecho ya conocido por esa persona. Las rutas clásicas (`register`, `resend-code`, `forgot`, `prelogin`) siguen sin revelar nada.
+- **Cuenta en periodo de gracia** por eliminación: ni entra ni se registra con Google (`403 forbidden/account-deleted`); se recupera restableciendo la contraseña.
+- **Desvinculación**: `DELETE /me/identities/google` exige la prueba de la contraseña. Google se vincula por `sub`, nunca por correo, y nunca de forma automática.
+
+## Dispositivos de confianza (ADR 0006)
+
+Solo para cuentas con Google vinculado (T1). La llave está partida en dos: el navegador guarda una clave AES **no exportable** (IndexedDB) y el servidor la clave maestra cifrada con esa clave (`a1.…`, datos asociados `apunte/v1/mk/<userId>/trusted/<trustId>`). Sin la mitad local el texto del servidor no sirve, y revocar el dispositivo desde otra sesión lo deja inservible.
+
+- Tope de **10 dispositivos vigentes** por cuenta (`403 forbidden/limit-reached`); el alta exige Google vinculado (`403 forbidden/google-not-linked`).
+- La lectura (`GET /trusted-devices/{id}`) exige una **sesión completa**: un `mfaToken` (primer factor a medias) no vale como Bearer.
+- Se revocan **todos** al cambiar o restablecer la contraseña (en `wipe` se borran: la MK cambia) y al desvincular Google. La purga borra los revocados a los 30 días y los no usados en 180 días.
+- Alta, lectura y baja dejan eventos en `audit_log` (`trusted-device-add|use|revoke`). RLS `own_rows` + `maintenance` sobre `trusted_devices`.

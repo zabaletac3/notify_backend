@@ -1,9 +1,11 @@
 package account_test
 
 import (
+	"encoding/base32"
 	"strings"
 	"testing"
 
+	"github.com/zabaletac3/notify_backend/internal/platform/security"
 	"github.com/zabaletac3/notify_backend/internal/testutil"
 )
 
@@ -51,13 +53,39 @@ func TestSettingsValidation(t *testing.T) {
 			t.Errorf("%s: %d %s", name, r.Code, r.Raw)
 		}
 	}
-	// Desactivar la verificación en dos pasos sí es válido (ya está desactivada).
-	if r := e.Do("PATCH", "/settings", map[string]any{"twoFactor": false}, tok, ""); r.Code != 200 {
-		t.Errorf("twoFactor=false: %d", r.Code)
+	// `twoFactor` es de solo lectura: enviarlo, sea `true` o `false`, da 422.
+	for _, v := range []bool{true, false} {
+		if r := e.Do("PATCH", "/settings", map[string]any{"twoFactor": v}, tok, ""); r.Code != 422 {
+			t.Errorf("twoFactor=%v: %d %s", v, r.Code, r.Raw)
+		}
 	}
 	// Los fallos no cambian nada.
 	if g := e.Do("GET", "/settings", nil, tok, ""); g.Body["theme"] != "system" {
 		t.Fatalf("una petición inválida cambió los ajustes: %s", g.Raw)
+	}
+}
+
+func TestSettingsReflectMfaState(t *testing.T) {
+	e := testutil.New(t)
+	tok := e.Account("ana@example.com")
+
+	r := e.Do("POST", "/mfa/totp/setup", map[string]any{"authKey": testutil.AuthKey}, tok, "")
+	if r.Code != 200 {
+		t.Fatalf("setup: %d %s", r.Code, r.Raw)
+	}
+	secret, _ := r.Body["secret"].(string)
+	raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := security.TOTPCode(raw, e.Now.Unix()/30)
+	if en := e.Do("POST", "/mfa/totp/enable", map[string]any{"code": code}, tok, ""); en.Code != 200 {
+		t.Fatalf("enable: %d %s", en.Code, en.Raw)
+	}
+	// `twoFactor` del contrato refleja el estado real (se calcula desde user_totp).
+	g := e.Do("GET", "/settings", nil, tok, "")
+	if g.Body["twoFactor"] != true {
+		t.Fatalf("twoFactor debería ser true: %s", g.Raw)
 	}
 }
 
