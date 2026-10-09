@@ -16,6 +16,7 @@ import (
 	"github.com/zabaletac3/notify_backend/internal/platform/apperrors"
 	"github.com/zabaletac3/notify_backend/internal/platform/database"
 	"github.com/zabaletac3/notify_backend/internal/platform/mailer"
+	"github.com/zabaletac3/notify_backend/internal/platform/oidc"
 	"github.com/zabaletac3/notify_backend/internal/platform/ratelimit"
 	"github.com/zabaletac3/notify_backend/internal/platform/security"
 )
@@ -52,6 +53,7 @@ type Deps struct {
 	Signer  *security.Signer
 	Limiter *ratelimit.Limiter
 	Mailer  mailer.Mailer
+	OIDC    oidc.Provider // nil = Google deshabilitado (GOOGLE_PROVIDER=off)
 	Log     *slog.Logger
 	Config  Config
 	Now     func() time.Time // opcional (pruebas)
@@ -288,6 +290,8 @@ func (s *Service) VerifyEmail(ctx context.Context, ip, email, code string) (*Ses
 		if err = database.SetUser(ctx, tx, u.ID); err != nil {
 			return err
 		}
+		// Una cuenta recién verificada no puede tener MFA (nunca se activó), así que aquí se puede
+		// seguir llamando a newSession directamente en vez de a completeLogin.
 		sess, err = s.newSession(ctx, tx, u, DeviceInfo{}, false)
 		return err
 	})
@@ -350,7 +354,7 @@ func (s *Service) ResendCode(ctx context.Context, ip, email string) error {
 
 // ── Login ───────────────────────────────────────────────────────
 
-func (s *Service) Login(ctx context.Context, ip string, req *LoginRequest) (*Session, error) {
+func (s *Service) Login(ctx context.Context, ip string, req *LoginRequest) (*loginOutcome, error) {
 	// Tope de intentos por IP ANTES de cualquier hash: Argon2id cuesta memoria y CPU, y sin esto bastaría
 	// inundar el login para agotar el servidor.
 	if err := s.take(ctx, s.Limiter.Key("login-hit", ip), loginHitRule); err != nil {
@@ -404,7 +408,7 @@ func (s *Service) Login(ctx context.Context, ip string, req *LoginRequest) (*Ses
 		newHash, _ = s.Hasher.Hash(req.AuthKey)
 	}
 	dev := cleanDevice(req.Device)
-	var sess *Session
+	var outcome *loginOutcome
 	err = database.WithUser(ctx, s.Pool, u.ID, func(tx pgx.Tx) error {
 		if newHash != nil {
 			if _, err := tx.Exec(ctx, `UPDATE users SET auth_key_hash = $2 WHERE id = $1`, u.ID, newHash); err != nil {
@@ -412,13 +416,44 @@ func (s *Service) Login(ctx context.Context, ip string, req *LoginRequest) (*Ses
 			}
 		}
 		var err error
-		sess, err = s.newSession(ctx, tx, u, dev, true)
+		outcome, err = s.completeLogin(ctx, tx, u, dev, "password")
 		return err
 	})
 	if err != nil {
 		return nil, apperrors.Internal(err)
 	}
-	return sess, nil
+	return outcome, nil
+}
+
+// loginOutcome es el resultado del primer factor: una sesión nueva o un reto de segundo paso (MFA).
+type loginOutcome struct {
+	Session  *Session
+	MFAToken string
+	MFAExp   time.Time
+}
+
+// completeLogin es el ÚNICO camino hacia una sesión nueva tras el primer factor (contraseña o
+// Google). Unifica el control del segundo paso: si la cuenta tiene MFA activo, no emite sesión sino
+// un ticket `mfa-login`. Google no puede saltarse el MFA (M3). tx debe tener la cuenta fijada
+// (database.SetUser).
+func (s *Service) completeLogin(ctx context.Context, tx pgx.Tx, u *userRow, dev DeviceInfo, method string) (*loginOutcome, error) {
+	enabled, err := mfaEnabled(ctx, tx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	if enabled {
+		token, err := s.newTicket(ctx, tx, ticketMFALogin, &u.ID,
+			mfaTicketPayload{Device: dev, Method: method}, mfaTicketTTL)
+		if err != nil {
+			return nil, err
+		}
+		return &loginOutcome{MFAToken: token, MFAExp: s.Now().Add(mfaTicketTTL)}, nil
+	}
+	sess, err := s.newSession(ctx, tx, u, dev, true)
+	if err != nil {
+		return nil, err
+	}
+	return &loginOutcome{Session: sess}, nil
 }
 
 // newSession registra el dispositivo y emite los dos tokens. tx debe tener la cuenta fijada.

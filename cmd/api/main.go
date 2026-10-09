@@ -21,6 +21,7 @@ import (
 	"github.com/zabaletac3/notify_backend/internal/platform/httpserver"
 	"github.com/zabaletac3/notify_backend/internal/platform/mailer"
 	"github.com/zabaletac3/notify_backend/internal/platform/observability"
+	"github.com/zabaletac3/notify_backend/internal/platform/oidc"
 	"github.com/zabaletac3/notify_backend/internal/platform/ratelimit"
 	"github.com/zabaletac3/notify_backend/internal/platform/security"
 )
@@ -79,8 +80,18 @@ func run() error {
 	}
 	limiter := ratelimit.New(pool, []byte(cfg.Pepper))
 
+	// Identidad externa (Google): `off` deja las rutas deshabilitadas (403). Los módulos solo ven la
+	// interfaz oidc.Provider.
+	oidcProvider, err := oidc.New(oidc.Options{
+		Provider: cfg.Google.Provider, ClientID: cfg.Google.ClientID,
+		ClientSecret: cfg.Google.ClientSecret, RedirectURL: cfg.Google.RedirectURL,
+	}, log)
+	if err != nil {
+		return err
+	}
+
 	authSvc := auth.NewService(auth.Deps{
-		Pool: pool, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: mail, Log: log,
+		Pool: pool, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: mail, OIDC: oidcProvider, Log: log,
 		Config: auth.Config{Pepper: []byte(cfg.Pepper), AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL, WebBaseURL: cfg.WebBaseURL},
 	})
 	defer authSvc.Close() // espera a los correos en vuelo

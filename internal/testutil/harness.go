@@ -26,6 +26,7 @@ import (
 	"github.com/zabaletac3/notify_backend/internal/platform/config"
 	"github.com/zabaletac3/notify_backend/internal/platform/httpserver"
 	"github.com/zabaletac3/notify_backend/internal/platform/mailer"
+	"github.com/zabaletac3/notify_backend/internal/platform/oidc"
 	"github.com/zabaletac3/notify_backend/internal/platform/ratelimit"
 	"github.com/zabaletac3/notify_backend/internal/platform/security"
 	"github.com/zabaletac3/notify_backend/internal/platform/testdb"
@@ -54,6 +55,8 @@ type Env struct {
 	Auth *auth.Service
 	DB   *testdb.DB
 	Now  time.Time
+	// OIDC es el proveedor simulado de Google; las pruebas pueden cambiar su identidad.
+	OIDC *oidc.Fake
 	// Logs recoge todo lo que la API registra (para comprobar que no filtra secretos).
 	Logs *bytes.Buffer
 }
@@ -72,7 +75,9 @@ func New(t *testing.T) *Env {
 	}
 	limiter := ratelimit.New(db.App, Pepper)
 	limiter.Now = now
-	e.Auth = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: e.Mail, Log: log, Now: now,
+	// Proveedor de Google simulado: AuthURL devuelve directamente el callback con un código de prueba.
+	e.OIDC = oidc.NewFake("http://api.test/v1/auth/google/callback")
+	e.Auth = auth.NewService(auth.Deps{Pool: db.App, Hasher: hasher, Signer: signer, Limiter: limiter, Mailer: e.Mail, OIDC: e.OIDC, Log: log, Now: now,
 		Config: auth.Config{Pepper: Pepper, AccessTTL: 15 * time.Minute, RefreshTTL: 24 * time.Hour, WebBaseURL: "http://web.test"}})
 	t.Cleanup(e.Auth.Close)
 	ah := auth.NewHandler(e.Auth, log, true, auth.CookieOptions{

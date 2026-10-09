@@ -79,6 +79,12 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Post("/auth/verify-email", h.verifyEmail)
 	r.Post("/auth/resend-code", h.resendCode)
 	r.Post("/auth/login", h.login)
+	r.Post("/auth/login/mfa", h.loginMFA)
+	r.Post("/auth/google/start", h.googleStart)
+	r.Get("/auth/google/callback", h.googleCallback)
+	r.Post("/auth/google/exchange", h.googleExchange)
+	r.Post("/auth/google/link", h.googleLink)
+	r.Post("/auth/google/register", h.googleRegister)
 	r.Post("/auth/refresh", h.refresh)
 	// Logout queda fuera del grupo protegido: en modo cookie debe funcionar aunque el token de acceso
 	// haya vencido. El propio handler exige el Bearer en modo cuerpo (igual que hoy).
@@ -92,8 +98,17 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Get("/auth/session", h.session)
 		r.Get("/devices", h.devices)
 		r.Delete("/devices/{deviceId}", h.removeDevice)
+		r.Get("/trusted-devices", h.trustedDevices)
+		r.Post("/trusted-devices", h.addTrustedDevice)
+		r.Get("/trusted-devices/{id}", h.trustedDevice)
+		r.Delete("/trusted-devices/{id}", h.removeTrustedDevice)
 		r.Get("/keys", h.keys)
 		r.Put("/keys/recovery", h.rotateRecovery)
+		r.Get("/mfa", h.mfaStatus)
+		r.Post("/mfa/totp/setup", h.mfaSetup)
+		r.Post("/mfa/totp/enable", h.mfaEnable)
+		r.Post("/mfa/totp/disable", h.mfaDisable)
+		r.Post("/mfa/recovery-codes", h.mfaRegenerate)
 		r.Post("/me/password", h.changePassword)
 		r.Post("/me/delete", h.deleteMeConfirmed)
 		r.Delete("/me", h.deleteMe)
@@ -101,6 +116,7 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Patch("/me", h.updateMe)
 		r.Post("/me/email-change", h.requestEmailChange)
 		r.Post("/me/email-change/confirm", h.confirmEmailChange)
+		r.Delete("/me/identities/google", h.unlinkGoogle)
 	})
 }
 
@@ -261,12 +277,140 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	sess, err := h.svc.Login(r.Context(), h.ip(r), &b)
+	outcome, err := h.svc.Login(r.Context(), h.ip(r), &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if outcome.Session != nil {
+		h.writeSession(w, outcome.Session, cookieMode)
+		return
+	}
+	// Reto de segundo paso: sin sesión, sin tokens, sin claves y sin cookie.
+	response.JSON(w, http.StatusOK, MfaChallenge{MFARequired: true, MFAToken: outcome.MFAToken, ExpiresAt: outcome.MFAExp})
+}
+
+func (h *Handler) loginMFA(w http.ResponseWriter, r *http.Request) {
+	cookieMode, ok := h.sessionMode(w, r)
+	if !ok {
+		return
+	}
+	var b LoginMfaRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	sess, err := h.svc.LoginMFA(r.Context(), h.ip(r), b.MFAToken, b.Code)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	h.writeSession(w, sess, cookieMode)
+}
+
+// ── Acceso con Google ────────────────────────────────────────────
+
+func (h *Handler) googleStart(w http.ResponseWriter, r *http.Request) {
+	var b GoogleStartRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out, err := h.svc.GoogleStart(r.Context(), h.ip(r), b.Challenge)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+// googleCallback responde siempre con un 302 a la web (nunca JSON): el resultado viaja en el
+// fragmento, que no llega al servidor web ni en el Referer. No emite cookies.
+func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	loc := h.svc.GoogleCallback(r.Context(), h.ip(r), q.Get("code"), q.Get("state"), q.Get("error"))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	http.Redirect(w, r, loc, http.StatusFound)
+}
+
+func (h *Handler) googleExchange(w http.ResponseWriter, r *http.Request) {
+	cookieMode, ok := h.sessionMode(w, r)
+	if !ok {
+		return
+	}
+	var b GoogleExchangeRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out, err := h.svc.GoogleExchange(r.Context(), h.ip(r), &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	// Solo la variante `authenticated` trae sesión: en modo cookie el refresh va a la cookie.
+	if out.Session != nil && cookieMode {
+		h.setRefreshCookie(w, out.Session.RefreshToken)
+		out.Session.RefreshToken = ""
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) googleLink(w http.ResponseWriter, r *http.Request) {
+	cookieMode, ok := h.sessionMode(w, r)
+	if !ok {
+		return
+	}
+	var b GoogleLinkRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	outcome, err := h.svc.GoogleLink(r.Context(), h.ip(r), &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if outcome.Session != nil {
+		h.writeSession(w, outcome.Session, cookieMode)
+		return
+	}
+	response.JSON(w, http.StatusOK, MfaChallenge{MFARequired: true, MFAToken: outcome.MFAToken, ExpiresAt: outcome.MFAExp})
+}
+
+func (h *Handler) googleRegister(w http.ResponseWriter, r *http.Request) {
+	cookieMode, ok := h.sessionMode(w, r)
+	if !ok {
+		return
+	}
+	var b GoogleRegisterRequest
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	sess, err := h.svc.GoogleRegister(r.Context(), h.ip(r), &b)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.writeSession(w, sess, cookieMode)
+}
+
+func (h *Handler) unlinkGoogle(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b struct {
+		AuthKey string `json:"authKey"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.UnlinkGoogle(r.Context(), p, b.AuthKey); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.NoContent(w)
 }
 
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
@@ -369,6 +513,49 @@ func (h *Handler) removeDevice(w http.ResponseWriter, r *http.Request) {
 	response.NoContent(w)
 }
 
+func (h *Handler) trustedDevices(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	list, err := h.svc.ListTrustedDevices(r.Context(), p)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) addTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b TrustedDeviceInput
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.AddTrustedDevice(r.Context(), p, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *Handler) trustedDevice(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	wrapped, err := h.svc.GetTrustedDevice(r.Context(), p, chi.URLParam(r, "id"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]string{"wrappedMasterKey": wrapped})
+}
+
+func (h *Handler) removeTrustedDevice(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	if err := h.svc.RevokeTrustedDevice(r.Context(), p, chi.URLParam(r, "id")); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.NoContent(w)
+}
+
 func (h *Handler) forgot(w http.ResponseWriter, r *http.Request) {
 	var b emailBody
 	if err := decode(w, r, &b); err != nil {
@@ -433,6 +620,85 @@ func (h *Handler) rotateRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.NoContent(w)
+}
+
+func (h *Handler) mfaStatus(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	st, err := h.svc.MFAStatus(r.Context(), p)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, st)
+}
+
+func (h *Handler) mfaSetup(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b struct {
+		AuthKey string `json:"authKey"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out, err := h.svc.SetupTOTP(r.Context(), p, b.AuthKey)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) mfaEnable(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b struct {
+		Code string `json:"code"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out, err := h.svc.EnableTOTP(r.Context(), p, b.Code)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) mfaDisable(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b struct {
+		AuthKey string `json:"authKey"`
+		Code    string `json:"code"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	if err := h.svc.DisableTOTP(r.Context(), p, b.AuthKey, b.Code); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.NoContent(w)
+}
+
+func (h *Handler) mfaRegenerate(w http.ResponseWriter, r *http.Request) {
+	p, _ := PrincipalFrom(r.Context())
+	var b struct {
+		AuthKey string `json:"authKey"`
+		Code    string `json:"code"`
+	}
+	if err := decode(w, r, &b); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	out, err := h.svc.RegenerateRecoveryCodes(r.Context(), p, b.AuthKey, b.Code)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {

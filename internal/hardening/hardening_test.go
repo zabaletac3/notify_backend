@@ -4,16 +4,50 @@ package hardening_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/zabaletac3/notify_backend/internal/platform/security"
 	"github.com/zabaletac3/notify_backend/internal/testutil"
 )
+
+// googleFlow recorre el flujo con el proveedor simulado y devuelve los valores que NUNCA deben
+// aparecer en los registros: el state, el código simulado, el verifier y el resultado.
+func googleFlow(t *testing.T, e *testutil.Env) (state, fakeCode, verifier, result string) {
+	t.Helper()
+	vb := make([]byte, 32)
+	if _, err := rand.Read(vb); err != nil {
+		t.Fatal(err)
+	}
+	verifier = base64.RawURLEncoding.EncodeToString(vb)
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+
+	s := e.Do("POST", "/auth/google/start", map[string]any{"challenge": challenge}, "", "")
+	u, err := url.Parse(s.Body["url"].(string))
+	if err != nil {
+		t.Fatalf("url de autorización: %v", err)
+	}
+	state, fakeCode = u.Query().Get("state"), u.Query().Get("code")
+	cb := e.Do("GET", "/auth/google/callback?code="+url.QueryEscape(fakeCode)+"&state="+url.QueryEscape(state), nil, "", "")
+	loc := cb.Hdr.Get("Location")
+	i := strings.Index(loc, "#")
+	if i < 0 {
+		t.Fatalf("callback sin fragmento: %s", loc)
+	}
+	q, _ := url.ParseQuery(loc[i+1:])
+	return state, fakeCode, verifier, q.Get("code")
+}
 
 const (
 	slug = "AbCdEfGhIjKlMnOpQrStUv"
@@ -59,6 +93,40 @@ func TestLogsNeverContainSecrets(t *testing.T) {
 	e.Do("POST", "/auth/logout", nil, "", "", testutil.Header("X-AxoNote-Session", "cookie"),
 		testutil.Cookie(&http.Cookie{Name: "axonote_rt", Value: rotatedRT}))
 
+	// MFA: alta, reto y segundo paso fallido. Ni el secreto, ni los códigos, ni el ticket deben registrarse.
+	setup := e.Do("POST", "/mfa/totp/setup", map[string]any{"authKey": testutil.AuthKey}, tok, "")
+	secret, _ := setup.Body["secret"].(string)
+	rawSecret, _ := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	totp := security.TOTPCode(rawSecret, e.Now.Unix()/30)
+	enabled := e.Do("POST", "/mfa/totp/enable", map[string]any{"code": totp}, tok, "")
+	var recoveryCode string
+	if arr, ok := enabled.Body["recoveryCodes"].([]any); ok && len(arr) > 0 {
+		recoveryCode, _ = arr[0].(string)
+	}
+	challenge := e.Do("POST", "/auth/login", map[string]any{"email": email, "authKey": testutil.AuthKey}, "", "")
+	mfaTicket, _ := challenge.Body["mfaToken"].(string)
+	e.Do("POST", "/auth/login/mfa", map[string]any{"mfaToken": mfaTicket, "code": strings.Repeat("9", 6)}, "", "")
+
+	// Google: start, callback (con el proveedor simulado) y canje. Ni el state, ni el código, ni el
+	// verifier ni el resultado deben acabar en los registros.
+	gState, gCode, gVerifier, gResult := googleFlow(t, e)
+	if gResult == "" {
+		t.Fatal("el flujo simulado de Google no devolvió resultado")
+	}
+	ex := e.Do("POST", "/auth/google/exchange", map[string]any{"code": gResult, "verifier": gVerifier}, "", "")
+	// Alta de un dispositivo de confianza: su clave maestra cifrada tampoco debe registrarse.
+	trustedWrap := "a1.YWJjZGVmZ2hpamtsbQ.ZGV2aWNlLXRydXN0ZWQ"
+	reg := e.Do("POST", "/auth/google/register", map[string]any{
+		"signupToken": ex.Body["signupToken"], "userId": testutil.NewID(), "fullName": "Persona Google",
+		"acceptedTerms": true, "authKey": testutil.AuthKey, "recoveryAuth": testutil.RecoveryKey,
+		"keys": map[string]any{"kdf": map[string]any{"alg": "argon2id", "memoryKiB": 1024, "iterations": 1, "parallelism": 1, "salt": "AAAAAAAAAAAAAAAAAAAAAA"},
+			"wrappedMasterKey": testutil.SealedKey, "recoveryWrappedMasterKey": testutil.SealedKey, "keysVersion": 1}}, "", "")
+	gAccess, _ := reg.Body["accessToken"].(string)
+	if gAccess == "" {
+		t.Fatalf("no se pudo crear la cuenta de Google para la prueba: %d %s", reg.Code, reg.Raw)
+	}
+	e.Do("POST", "/trusted-devices", map[string]any{"id": testutil.NewID(), "name": "Navegador", "platform": "web", "wrappedMasterKey": trustedWrap}, gAccess, "")
+
 	e.Do("POST", "/auth/password/forgot", map[string]any{"email": email}, "", "")
 	e.Auth.Close()
 	var resetToken string
@@ -83,6 +151,9 @@ func TestLogsNeverContainSecrets(t *testing.T) {
 		"token de restablecimiento": resetToken, "payload": testutil.SealedA, "clave envuelta": testutil.SealedKey,
 		"slug": slug, "copia pública": copy, "clave del enlace": wrap, "correo": email, "id de nota": note,
 		"cookie de refresco": cookieRT, "cookie de refresco rotada": rotatedRT,
+		"secreto TOTP": secret, "código de respaldo": recoveryCode, "código TOTP": totp, "ticket MFA": mfaTicket,
+		"state de Google": gState, "código simulado de Google": gCode, "verifier de Google": gVerifier, "resultado de Google": gResult,
+		"clave de dispositivo de confianza": trustedWrap,
 	}
 	for name, v := range secrets {
 		if v != "" && strings.Contains(logs, v) {
@@ -145,6 +216,18 @@ func TestHostileStringsNeverCauseServerErrors(t *testing.T) {
 		check("correo nuevo", e.Do("POST", "/me/email-change", map[string]any{"newEmail": h, "authKey": h}, tok, ip))
 		check("confirmar correo", e.Do("POST", "/me/email-change/confirm", map[string]any{"email": h, "code": h}, tok, ip))
 		check("ajustes", e.Do("PATCH", "/settings", map[string]any{"theme": h}, tok, ip))
+		check("mfa estado", e.Do("GET", "/mfa", nil, tok, ip))
+		check("mfa setup", e.Do("POST", "/mfa/totp/setup", map[string]any{"authKey": h}, tok, ip))
+		check("mfa enable", e.Do("POST", "/mfa/totp/enable", map[string]any{"code": h}, tok, ip))
+		check("mfa disable", e.Do("POST", "/mfa/totp/disable", map[string]any{"authKey": h, "code": h}, tok, ip))
+		check("mfa códigos", e.Do("POST", "/mfa/recovery-codes", map[string]any{"authKey": h, "code": h}, tok, ip))
+		check("mfa login", e.Do("POST", "/auth/login/mfa", map[string]any{"mfaToken": h, "code": h}, "", ip))
+		check("google start", e.Do("POST", "/auth/google/start", map[string]any{"challenge": h}, "", ip))
+		check("google exchange", e.Do("POST", "/auth/google/exchange", map[string]any{"code": h, "verifier": h}, "", ip))
+		check("google link", e.Do("POST", "/auth/google/link", map[string]any{"linkToken": h, "authKey": h}, "", ip))
+		check("google register", e.Do("POST", "/auth/google/register", map[string]any{"signupToken": h, "userId": h, "fullName": h,
+			"acceptedTerms": true, "authKey": h, "recoveryAuth": h, "keys": map[string]any{}}, "", ip))
+		check("google unlink", e.Do("DELETE", "/me/identities/google", map[string]any{"authKey": h}, tok, ip))
 		check("sync cursor", e.Do("POST", "/sync", map[string]any{"cursor": h, "changes": []any{}}, tok, ip))
 		check("sync cambio", e.Do("POST", "/sync", map[string]any{"cursor": nil, "changes": []any{map[string]any{
 			"entity": h, "id": h, "op": h, "baseRevision": 0, "data": map[string]any{"payload": h, "wrappedKey": h, "folderId": h}}}}, tok, ip))
@@ -157,7 +240,12 @@ func TestHostileStringsNeverCauseServerErrors(t *testing.T) {
 		}
 		check("GET nota", e.Do("GET", "/notes/"+enc, nil, tok, ip))
 		check("GET público", e.Do("GET", "/public/notes/"+enc, nil, "", ip))
+		check("google callback", e.Do("GET", "/auth/google/callback?code="+enc+"&state="+enc, nil, "", ip))
 		check("DELETE dispositivo", e.Do("DELETE", "/devices/"+enc, nil, tok, ip))
+		check("trusted lista", e.Do("GET", "/trusted-devices", nil, tok, ip))
+		check("trusted crear", e.Do("POST", "/trusted-devices", map[string]any{"id": h, "name": h, "platform": h, "wrappedMasterKey": h}, tok, ip))
+		check("trusted ver", e.Do("GET", "/trusted-devices/"+enc, nil, tok, ip))
+		check("trusted borrar", e.Do("DELETE", "/trusted-devices/"+enc, nil, tok, ip))
 		check("lista", e.Do("GET", "/notes?trashed="+enc+"&updatedSince="+enc+"&cursor="+enc+"&limit="+enc, nil, tok, ip))
 	}
 	var users1 int

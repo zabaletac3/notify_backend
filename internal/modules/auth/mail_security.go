@@ -21,11 +21,55 @@ func resetMail(to, webBase, token string, ttl time.Duration) mailer.Message {
 }
 
 func passwordChangedMail(to string) mailer.Message {
+	return passwordChangedMailMFA(to, false)
+}
+
+// passwordChangedMailMFA avisa del cambio de contraseña y, si procede, de que además se desactivó la
+// verificación en dos pasos (S3/M5).
+func passwordChangedMailMFA(to string, mfaDisabled bool) mailer.Message {
+	text := "La contraseña de tu cuenta de AxoNote se cambió y se cerraron las sesiones en tus otros dispositivos.\n\n" +
+		"Si no fuiste tú, restablécela desde «Olvidé mi contraseña» cuanto antes."
+	if mfaDisabled {
+		text += "\n\nAdemás, se desactivó la verificación en dos pasos de tu cuenta."
+	}
+	return mailer.Message{To: to, Subject: "Tu contraseña de AxoNote cambió", Text: text}
+}
+
+func mfaEnabledMail(to string) mailer.Message {
 	return mailer.Message{
 		To:      to,
-		Subject: "Tu contraseña de AxoNote cambió",
-		Text: "La contraseña de tu cuenta de AxoNote se cambió y se cerraron las sesiones en tus otros dispositivos.\n\n" +
-			"Si no fuiste tú, restablécela desde «Olvidé mi contraseña» cuanto antes.",
+		Subject: "Activaste la verificación en dos pasos de AxoNote",
+		Text: "La verificación en dos pasos ya está activa en tu cuenta de AxoNote. Desde ahora, para abrir una sesión nueva " +
+			"necesitarás tu contraseña y un código de tu aplicación de autenticación.\n\n" +
+			"Guarda los códigos de respaldo en un lugar seguro: son la única forma de entrar si pierdes el autenticador.\n\n" +
+			"Si no fuiste tú, cambia tu contraseña cuanto antes.",
+	}
+}
+
+func mfaDisabledMail(to string) mailer.Message {
+	return mailer.Message{
+		To:      to,
+		Subject: "Desactivaste la verificación en dos pasos de AxoNote",
+		Text: "La verificación en dos pasos ya no está activa en tu cuenta de AxoNote. Para abrir una sesión nueva bastará " +
+			"tu contraseña.\n\nSi no fuiste tú, cambia tu contraseña y vuelve a activarla cuanto antes.",
+	}
+}
+
+func googleLinkedMail(to string) mailer.Message {
+	return mailer.Message{
+		To:      to,
+		Subject: "Vinculaste Google con tu cuenta de AxoNote",
+		Text: "Ya puedes iniciar sesión en AxoNote con Google. Tu contraseña de AxoNote sigue siendo necesaria para " +
+			"descifrar tus notas en los dispositivos nuevos.\n\nSi no fuiste tú, cambia tu contraseña y desvincula Google cuanto antes.",
+	}
+}
+
+func googleUnlinkedMail(to string) mailer.Message {
+	return mailer.Message{
+		To:      to,
+		Subject: "Desvinculaste Google de tu cuenta de AxoNote",
+		Text: "Google ya no está vinculado con tu cuenta de AxoNote. Para entrar tendrás que usar tu correo y tu " +
+			"contraseña, como antes.\n\nSi no fuiste tú, cambia tu contraseña cuanto antes.",
 	}
 }
 

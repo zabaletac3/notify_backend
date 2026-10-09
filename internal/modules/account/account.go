@@ -71,8 +71,8 @@ func oneOf(field string, v *string, bad map[string]string) {
 	bad[field] = "invalid-payload"
 }
 
-// validate comprueba el parche y devuelve campo → código. La verificación en dos pasos aún no existe en
-// el servidor, así que no se puede activar: aceptarlo daría una falsa sensación de seguridad.
+// validate comprueba el parche y devuelve campo → código. `twoFactor` es de solo lectura (se gestiona
+// con `/mfa`): enviarlo, sea `true` o `false`, es un error para no dar una falsa sensación de control.
 func (p *SettingsPatch) validate() map[string]string {
 	bad := map[string]string{}
 	oneOf("theme", p.Theme, bad)
@@ -80,7 +80,7 @@ func (p *SettingsPatch) validate() map[string]string {
 	oneOf("noteOrder", p.NoteOrder, bad)
 	oneOf("language", p.Language, bad)
 	oneOf("lockTimeout", p.LockTimeout, bad)
-	if p.TwoFactor != nil && *p.TwoFactor {
+	if p.TwoFactor != nil {
 		bad["twoFactor"] = "invalid-payload"
 	}
 	if *p == (SettingsPatch{}) {
@@ -111,7 +111,6 @@ func (p *SettingsPatch) apply(s *Settings) {
 	setb(&s.BiometricLock, p.BiometricLock)
 	setb(&s.LockOnExit, p.LockOnExit)
 	set(&s.LockTimeout, p.LockTimeout)
-	setb(&s.TwoFactor, p.TwoFactor)
 }
 
 // Usage es el uso de espacio (StorageUsage del contrato).
@@ -147,6 +146,13 @@ func readSettings(ctx context.Context, tx pgx.Tx, userID string, lock bool) (Set
 			return Settings{}, err
 		}
 	}
+	// `twoFactor` no se guarda en settings: es el estado real de la verificación en dos pasos. Se lee
+	// directamente de `user_totp` (account no importa auth; comparte la transacción con RLS ya fijada).
+	var enabled bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_totp WHERE user_id = app_user_id() AND enabled_at IS NOT NULL)`).Scan(&enabled); err != nil {
+		return Settings{}, err
+	}
+	s.TwoFactor = enabled
 	return s, nil
 }
 

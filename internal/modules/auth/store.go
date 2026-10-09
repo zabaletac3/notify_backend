@@ -22,24 +22,29 @@ type userRow struct {
 	WrappedMK        string
 	RecoveryMK       string
 	KeysVersion      int
+	HasGoogle        bool
 }
 
 func (u *userRow) view() User {
-	return User{ID: u.ID, Email: u.Email, FullName: u.FullName, EmailVerified: u.VerifiedAt != nil, CreatedAt: u.CreatedAt}
+	return User{ID: u.ID, Email: u.Email, FullName: u.FullName, EmailVerified: u.VerifiedAt != nil, CreatedAt: u.CreatedAt, HasGoogle: u.HasGoogle}
 }
 
 func (u *userRow) keys() *KeyBundle {
 	return &KeyBundle{Kdf: u.Kdf, WrappedMasterKey: u.WrappedMK, RecoveryWrappedMasterKey: u.RecoveryMK, KeysVersion: u.KeysVersion}
 }
 
-const userCols = `id::text, email, full_name, email_verified_at, created_at, deleted_at, auth_key_hash, recovery_auth_hash, kdf, keys, keys_version`
+// userCols se usa siempre contra la tabla `users` (sin alias): el EXISTS de la última columna liga la
+// identidad de Google a esa fila. `user_identities` no tiene RLS, así que funciona también sin cuenta
+// fijada.
+const userCols = `id::text, email, full_name, email_verified_at, created_at, deleted_at, auth_key_hash, recovery_auth_hash, kdf, keys, keys_version,
+	EXISTS (SELECT 1 FROM user_identities ui WHERE ui.user_id = users.id AND ui.provider = 'google')`
 
 func scanUser(row pgx.Row) (*userRow, error) {
 	var (
 		u         userRow
 		kdf, keys []byte
 	)
-	err := row.Scan(&u.ID, &u.Email, &u.FullName, &u.VerifiedAt, &u.CreatedAt, &u.DeletedAt, &u.AuthKeyHash, &u.RecoveryAuthHash, &kdf, &keys, &u.KeysVersion)
+	err := row.Scan(&u.ID, &u.Email, &u.FullName, &u.VerifiedAt, &u.CreatedAt, &u.DeletedAt, &u.AuthKeyHash, &u.RecoveryAuthHash, &kdf, &keys, &u.KeysVersion, &u.HasGoogle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
