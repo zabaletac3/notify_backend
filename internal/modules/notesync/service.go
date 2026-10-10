@@ -220,7 +220,7 @@ func (s *Service) applyNote(ctx context.Context, tx pgx.Tx, p Principal, c parse
 	}
 
 	prior, bumped := folderBump[c.ID]
-	if rev != c.BaseRevision && !(bumped && prior == c.BaseRevision) {
+	if rev != c.BaseRevision && (!bumped || prior != c.BaseRevision) {
 		// El servidor no pisa: devuelve su versión y el cliente decide (local, remota o ambas).
 		remote, err := s.readNote(ctx, tx, c.ID)
 		if err != nil {
