@@ -162,6 +162,75 @@ func TestFolderDeleteUnlinksNotesAndLastWriteWins(t *testing.T) {
 	}
 }
 
+// El cliente borra una carpeta con notas y, en la misma petición, sube un upsert por cada nota (con
+// la baseRevision que tenían antes del borrado): no debe verse como conflicto contra sí mismo.
+func TestFolderDeleteDoesNotConflictWithItsOwnNotesInSameRequest(t *testing.T) {
+	e := newEnv(t, Limits{})
+	a := e.account("ana@example.com")
+	folder, n1, n2 := newID(), newID(), newID()
+	a.sync(nil, folderUpsert(folder, 0, sealedPl), noteUpsert(n1, 0, folder, sealedPl), noteUpsert(n2, 0, folder, sealedPl))
+
+	r := a.sync(nil, del("folder", folder, 1), noteUpsert(n1, 1, nil, sealedPl2), noteUpsert(n2, 1, nil, sealedPl2))
+	if r.Code != 200 {
+		t.Fatalf("sync: %s", r)
+	}
+	if len(list(r, "conflicts")) != 0 {
+		t.Fatalf("no debía haber conflictos: %s", r)
+	}
+	applied := list(r, "applied")
+	if len(applied) != 3 {
+		t.Fatalf("debían aplicarse los tres cambios: %s", r)
+	}
+	for _, ap := range applied {
+		if ap["entity"] == "note" && ap["revision"] != float64(3) {
+			t.Fatalf("revisión de la nota (1 creación + 1 por el borrado + 1 por su upsert): %v", ap)
+		}
+		if ap["entity"] == "folder" && ap["revision"] != float64(2) {
+			t.Fatalf("revisión de la carpeta: %v", ap)
+		}
+	}
+	for _, id := range []string{n1, n2} {
+		got := e.do("GET", "/notes/"+id, nil, a.token)
+		if got.Code != 200 || got.Body["folderId"] != nil || got.Body["revision"] != float64(3) || got.Body["payload"] != sealedPl2 {
+			t.Fatalf("nota %s tras borrar su carpeta: %s", id, got)
+		}
+	}
+}
+
+// Caso de control: si otra petición cambió la nota antes (otro dispositivo), sigue habiendo conflicto
+// aunque la carpeta se borre en la misma petición que el upsert desactualizado.
+func TestFolderDeleteStillConflictsWhenAnotherRequestChangedTheNoteFirst(t *testing.T) {
+	e := newEnv(t, Limits{})
+	a := e.account("ana@example.com")
+	b := e.login("ana@example.com", "Pixel 8")
+	folder, note := newID(), newID()
+	a.sync(nil, folderUpsert(folder, 0, sealedPl), noteUpsert(note, 0, folder, sealedPl))
+
+	// Otro dispositivo edita la nota (revisión 1 -> 2) en una petición aparte, antes de que A borre la carpeta.
+	if r := b.sync(nil, noteUpsert(note, 1, folder, sealedPl2)); r.Code != 200 {
+		t.Fatalf("edición de B: %s", r)
+	}
+
+	// A no vio esa edición: borra la carpeta y sube la nota con la baseRevision que tenía antes (1), ya obsoleta.
+	r := a.sync(nil, del("folder", folder, 1), noteUpsert(note, 1, nil, "a1.DDDDDDDDDDDDDDDD.QUJDREVGRw"))
+	if r.Code != 200 {
+		t.Fatalf("sync: %s", r)
+	}
+	conf := list(r, "conflicts")
+	if len(conf) != 1 || conf[0]["noteId"] != note {
+		t.Fatalf("debía seguir habiendo conflicto: %s", r)
+	}
+	remote := conf[0]["remote"].(map[string]any)
+	if remote["payload"] != sealedPl2 || remote["revision"] != float64(3) || remote["folderId"] != nil {
+		t.Fatalf("la versión remota debía ser la de B, ya sin carpeta: %v", remote)
+	}
+	// El borrado de la carpeta sí se aplica: no depende de la nota.
+	applied := list(r, "applied")
+	if len(applied) != 1 || applied[0]["entity"] != "folder" {
+		t.Fatalf("la carpeta debía borrarse igual: %s", r)
+	}
+}
+
 func TestSyncIsAtomicAndValidatesEverything(t *testing.T) {
 	e := newEnv(t, Limits{})
 	a := e.account("ana@example.com")
