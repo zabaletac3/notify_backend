@@ -50,6 +50,10 @@ func (s *Service) Sync(ctx context.Context, p Principal, req *Request) (*Respons
 	err := database.WithUser(ctx, s.pool, p.UserID, func(tx pgx.Tx) error {
 		res = &Response{Applied: []Applied{}, RemoteChanges: []RemoteChange{}, Conflicts: []ConflictReport{}}
 		touched := map[string]bool{}
+		// Revisión de cada nota justo antes de que, en esta misma petición, el borrado de su carpeta
+		// se la subiera de rebote (ver applyFolder/applyNote): así el upsert de esa nota que llegue con
+		// esa revisión anterior no choca contra un cambio que, en los hechos, él mismo provocó.
+		folderBump := map[string]int{}
 		if len(changes) > 0 {
 			// Serializa las escrituras de la cuenta desde el principio: evita interbloqueos y hace que el
 			// orden de `seq` coincida con el de confirmación.
@@ -63,9 +67,9 @@ func (s *Service) Sync(ctx context.Context, p Principal, req *Request) (*Respons
 		for _, c := range changes {
 			var err error
 			if c.Entity == "folder" {
-				err = s.applyFolder(ctx, tx, c, res, touched)
+				err = s.applyFolder(ctx, tx, c, res, touched, folderBump)
 			} else {
-				err = s.applyNote(ctx, tx, p, c, res, touched)
+				err = s.applyNote(ctx, tx, p, c, res, touched, folderBump)
 			}
 			if err != nil {
 				return err
@@ -167,7 +171,7 @@ func nextSeq(ctx context.Context, tx pgx.Tx) (int64, error) {
 
 // ── Notas ──────────────────────────────────────────────────────────
 
-func (s *Service) applyNote(ctx context.Context, tx pgx.Tx, p Principal, c parsed, res *Response, touched map[string]bool) error {
+func (s *Service) applyNote(ctx context.Context, tx pgx.Tx, p Principal, c parsed, res *Response, touched map[string]bool, folderBump map[string]int) error {
 	key := "note:" + c.ID
 	var rev int
 	err := tx.QueryRow(ctx, `SELECT revision FROM notes WHERE id = $1 FOR UPDATE`, c.ID).Scan(&rev)
@@ -215,7 +219,8 @@ func (s *Service) applyNote(ctx context.Context, tx pgx.Tx, p Principal, c parse
 		return nil
 	}
 
-	if rev != c.BaseRevision {
+	prior, bumped := folderBump[c.ID]
+	if rev != c.BaseRevision && (!bumped || prior != c.BaseRevision) {
 		// El servidor no pisa: devuelve su versión y el cliente decide (local, remota o ambas).
 		remote, err := s.readNote(ctx, tx, c.ID)
 		if err != nil {
@@ -263,7 +268,7 @@ func (s *Service) deviceName(ctx context.Context, tx pgx.Tx, deviceID string) st
 // ── Carpetas ───────────────────────────────────────────────────────
 
 // Las carpetas no tienen conflictos: gana el último cambio.
-func (s *Service) applyFolder(ctx context.Context, tx pgx.Tx, c parsed, res *Response, touched map[string]bool) error {
+func (s *Service) applyFolder(ctx context.Context, tx pgx.Tx, c parsed, res *Response, touched map[string]bool, folderBump map[string]int) error {
 	key := "folder:" + c.ID
 	touched[key] = true
 	var rev int
@@ -284,31 +289,38 @@ func (s *Service) applyFolder(ctx context.Context, tx pgx.Tx, c parsed, res *Res
 			}
 			// Sus notas pasan a "sin carpeta" también en el servidor (es un metadato; no hace falta descifrar).
 			// Un seq por nota: el cursor de /sync necesita que sean únicos para poder paginar sin perder cambios.
-			rows, err := tx.Query(ctx, `SELECT id::text FROM notes WHERE folder_id = $1 FOR UPDATE`, c.ID)
+			rows, err := tx.Query(ctx, `SELECT id::text, revision FROM notes WHERE folder_id = $1 FOR UPDATE`, c.ID)
 			if err != nil {
 				return err
 			}
-			var ids []string
+			type noteRev struct {
+				id  string
+				rev int
+			}
+			var notes []noteRev
 			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
+				var nr noteRev
+				if err := rows.Scan(&nr.id, &nr.rev); err != nil {
 					rows.Close()
 					return err
 				}
-				ids = append(ids, id)
+				notes = append(notes, nr)
 			}
 			rows.Close()
 			if err := rows.Err(); err != nil {
 				return err
 			}
-			for _, id := range ids {
+			for _, nr := range notes {
 				seq, err := nextSeq(ctx, tx)
 				if err != nil {
 					return err
 				}
-				if _, err := tx.Exec(ctx, `UPDATE notes SET folder_id = NULL, revision = revision + 1, seq = $2 WHERE id = $1`, id, seq); err != nil {
+				if _, err := tx.Exec(ctx, `UPDATE notes SET folder_id = NULL, revision = revision + 1, seq = $2 WHERE id = $1`, nr.id, seq); err != nil {
 					return err
 				}
+				// Guarda la revisión que tenía antes de esta subida de rebote: un upsert/delete de esta
+				// misma petición con esa baseRevision no es un conflicto real (ver applyNote).
+				folderBump[nr.id] = nr.rev
 			}
 		}
 		res.Applied = append(res.Applied, Applied{Entity: "folder", ID: c.ID, Revision: next})
